@@ -381,6 +381,7 @@ void closure_test(const char* rootFile, const char* levelIn = "truth",
     std::vector<double> vNaive(nRepeats), vMM(nRepeats), vShuffle(nRepeats);
     std::vector<double> vNSB(nRepeats), vNSBerr(nRepeats);
     std::vector<double> vNMI(nRepeats), vNMIerr(nRepeats);
+    std::vector<double> vSBA(nRepeats), vSBAerr(nRepeats);
 
     for (int rep=0; rep<nRepeats; ++rep) {
         std::vector<int> na, nb;
@@ -394,6 +395,8 @@ void closure_test(const char* rootFile, const char* levelIn = "truth",
         vNSBerr[rep] = nsbRes.I_err;
         vNMI[rep] = nsbRes.NMI;
         vNMIerr[rep] = nsbRes.NMI_err;
+        vSBA[rep] = nsbRes.SBA;
+        vSBAerr[rep] = nsbRes.SBA_err;
 
         if ((rep+1) % std::max(1, nRepeats/5) == 0)
             std::cout << "    ... " << (rep+1) << "/" << nRepeats << " repeats done\n";
@@ -550,6 +553,100 @@ void closure_test(const char* rootFile, const char* levelIn = "truth",
 
     c2->SaveAs(outPrefix + "_closure_test_NMI.png");
     std::cout << "\n  saved " << outPrefix << "_closure_test_NMI.png\n";
+
+    // ---- NEW: S(B|A) closure test (separate report + separate plot
+    // file; the I and NMI figures above are untouched). This is the
+    // actual quantum-witness quantity -- worth its own dedicated
+    // calibration check rather than inferring its behavior from I's.
+    // Purely diagnostic: no bias/coverage correction is applied anywhere
+    // here. ----
+    std::cout << "\n" << std::string(70,'=') << "\nS(B|A) CLOSURE TEST (N=" << N_closure << " per repeat)\n" << std::string(70,'=') << "\n";
+    std::cout << "S(B|A)_true (pseudo-truth) = " << SBA_true
+              << "  (classically must be >=0; a well-calibrated pipeline should "
+              << "never call this negative at high significance when the true "
+              << "value is this solidly positive)\n\n";
+
+    double sbaMean = meanOf(vSBA), sbaStd = stdOf(vSBA);
+    double sbaBias = sbaMean - SBA_true;
+    printf("%14s | %14s | %16s | %10s | %9s\n", "method","mean estimate","std across reps","bias","bias/std");
+    std::cout << std::string(78,'-') << "\n";
+    printf("%14s | %14.5f | %16.5f | %+10.5f | %+9.2f\n", "NSB", sbaMean, sbaStd, sbaBias, sbaBias/sbaStd);
+
+    std::vector<double> sbaPulls(nRepeats);
+    for (int i=0;i<nRepeats;++i) sbaPulls[i] = (vSBA[i]-SBA_true)/vSBAerr[i];
+    double sbaPullMean = meanOf(sbaPulls), sbaPullStd = stdOf(sbaPulls);
+    int sbaWithin1=0, sbaWithin2=0;
+    for (double p : sbaPulls) { if (std::abs(p)<1.0) sbaWithin1++; if (std::abs(p)<2.0) sbaWithin2++; }
+    std::cout << "\nNSB S(B|A) pull distribution (estimate - truth) / reported_sigma:\n";
+    std::cout << "  mean pull = " << sbaPullMean << "  (should be ~0 if unbiased)\n";
+    std::cout << "  std  pull = " << sbaPullStd  << "  (should be ~1 if uncertainty is well-calibrated)\n";
+    printf("  fraction within +/-1 sigma: %.1f%%  (expect ~68%%)\n", 100.0*sbaWithin1/nRepeats);
+    printf("  fraction within +/-2 sigma: %.1f%%  (expect ~95%%)\n", 100.0*sbaWithin2/nRepeats);
+    if (std::abs(sbaPullStd - 1.0) > 0.3) {
+        std::cout << "  NOTE: pull std deviates from 1 by >0.3 -- NSB uncertainty on "
+                  << "S(B|A) specifically appears "
+                  << (sbaPullStd > 1.3 ? "UNDER-covering (error bars too small)" : "OVER-covering (too conservative)")
+                  << " for data shaped like this, at N=" << N_closure
+                  << ". Since S(B|A) is the quantity actually used for the "
+                  << "quantum-witness claim, check this number directly rather "
+                  << "than assuming it matches I's or NMI's calibration.\n";
+    }
+
+    TCanvas* c3 = new TCanvas("cClosureSBA", "S(B|A) closure test", 1600, 480);
+    c3->Divide(3,1);
+
+    c3->cd(1);
+    TH1D* hBarSBA = new TH1D("hBarSBA", "S(B|A) closure test: recovery;;recovered S(B|A) (nats)", 1, 0, 1);
+    hBarSBA->SetBinContent(1, sbaMean); hBarSBA->SetBinError(1, sbaStd);
+    hBarSBA->GetXaxis()->SetBinLabel(1, "NSB");
+    hBarSBA->SetFillColorAlpha(kMagenta+2, 0.6);
+    hBarSBA->SetStats(0);
+
+    // Headroom for legend, same convention as analyze_dijet_entropy.C.
+    {
+        double yMax = std::max(sbaMean+sbaStd, SBA_true);
+        double yMin = std::min({0.0, sbaMean-sbaStd, SBA_true});
+        double range = yMax - yMin;
+        hBarSBA->SetMaximum(yMax + 0.30*range);
+        hBarSBA->SetMinimum(yMin - 0.05*range);
+    }
+    hBarSBA->Draw("E1 HIST");
+    TLine* trueLineSBA = new TLine(0, SBA_true, 1, SBA_true);
+    trueLineSBA->SetLineColor(kBlack); trueLineSBA->SetLineStyle(2); trueLineSBA->SetLineWidth(2);
+    trueLineSBA->Draw();
+    TLine* classicalFloorSBA = new TLine(0, 0, 1, 0);
+    classicalFloorSBA->SetLineColor(kRed); classicalFloorSBA->SetLineStyle(3);
+    classicalFloorSBA->Draw();
+
+    c3->cd(2);
+    double pminS = *std::min_element(sbaPulls.begin(),sbaPulls.end())-0.5;
+    double pmaxS = *std::max_element(sbaPulls.begin(),sbaPulls.end())+0.5;
+    TH1D* hPullSBA = new TH1D("hPullSBA", "NSB S(B|A) calibration: pull distribution;(#hat{S}(B|A)_{NSB}-S(B|A)_{true})/#sigma_{S(B|A)};density",
+                               std::max(8, nRepeats/4), std::min(-4.0,pminS), std::max(4.0,pmaxS));
+    for (double p : sbaPulls) hPullSBA->Fill(p);
+    if (hPullSBA->Integral() > 0) hPullSBA->Scale(1.0/hPullSBA->Integral("width"));
+    hPullSBA->SetFillColorAlpha(kMagenta+2, 0.5);
+    hPullSBA->SetStats(0);
+    hPullSBA->Draw("HIST");
+    TF1* fGausSBA = new TF1("fGausSBA", "TMath::Gaus(x,0,1,1)", -4, 4);
+    fGausSBA->SetLineColor(kBlack); fGausSBA->SetLineStyle(2); fGausSBA->SetLineWidth(2);
+    fGausSBA->Draw("SAME");
+    TLegend* legPSBA = new TLegend(0.6,0.7,0.88,0.88);
+    legPSBA->AddEntry(hPullSBA, "NSB S(B|A) pulls", "f");
+    legPSBA->AddEntry(fGausSBA, "standard normal", "l");
+    legPSBA->Draw();
+
+    c3->cd(3);
+    TGraphErrors* gRepSBA = new TGraphErrors(nRepeats, repIdx.data(), vSBA.data(), zeros.data(), vSBAerr.data());
+    gRepSBA->SetMarkerStyle(20); gRepSBA->SetMarkerColor(kMagenta+2); gRepSBA->SetLineColor(kMagenta+2);
+    gRepSBA->SetTitle("NSB S(B|A) per-repeat estimates vs. truth;repeat #;NSB S(B|A) estimate #pm bootstrap #sigma");
+    gRepSBA->Draw("AP");
+    TLine* trueLine2SBA = new TLine(0, SBA_true, nRepeats-1, SBA_true);
+    trueLine2SBA->SetLineColor(kBlack); trueLine2SBA->SetLineStyle(2); trueLine2SBA->SetLineWidth(2);
+    trueLine2SBA->Draw();
+
+    c3->SaveAs(outPrefix + "_closure_test_SBA.png");
+    std::cout << "\n  saved " << outPrefix << "_closure_test_SBA.png\n";
 
     std::cout << "\nDone.\n";
 }

@@ -422,23 +422,18 @@ AllEstimatorsResult bootstrapAllEstimators(const std::vector<int>& nA, const std
     r.I_nsb     = nsbPoint.I;
     r.SBA_nsb   = nsbPoint.S_AB - nsbPoint.S_A;
 
-    // NMI point estimates. NSB's NMI (value AND error) is copied directly
-    // from nsbPoint -- nsbMI() already computes NMI analytically and
-    // consistently with everything else that calls nsbMI(), so no
-    // separate bootstrap is needed (and avoids introducing a NEW
-    // value/error inconsistency for this quantity, unlike I_nsb/SBA_nsb
-    // above whose error bars DO come from this function's own bootstrap
-    // loop below -- a pre-existing asymmetry in this macro, not
-    // introduced by the NMI addition).
+    // NMI point estimates (all single-shot, on the real data -- same
+    // convention as I_naive/I_mm/I_nsb above).
     r.NMI_naive = r.I_naive / std::min(naivePoint.S_A, naivePoint.S_B);
     r.NMI_mm    = I_mm_point / std::min(S_A_mm_point, naivePoint.S_B - (naivePoint.K_B-1)/(2.0*naivePoint.N));
-    r.NMI_nsb     = nsbPoint.NMI;
-    r.NMI_nsb_err = nsbPoint.NMI_err;
+    r.NMI_nsb   = nsbPoint.NMI;
+    // NMI_nsb_err is NOT set here -- fixed below to come from the SAME
+    // bootstrap loop as I_nsb_err/SBA_nsb_err (see bug note below).
 
     // ---- uncertainty: spread over bootstrap resamples ----
     std::vector<double> vI_naive(nBoot), vI_mm(nBoot), vI_shuffle(nBoot), vI_nsb(nBoot);
     std::vector<double> vSBA_naive(nBoot), vSBA_mm(nBoot), vSBA_nsb(nBoot);
-    std::vector<double> vNMI_naive(nBoot), vNMI_mm(nBoot);
+    std::vector<double> vNMI_naive(nBoot), vNMI_mm(nBoot), vNMI_nsb(nBoot);
 
     for (int b = 0; b < nBoot; ++b) {
         std::vector<int> rA(N), rB(N);
@@ -467,6 +462,16 @@ AllEstimatorsResult bootstrapAllEstimators(const std::vector<int>& nA, const std
         NSBmiResult nsb = nsbMI(rA, rB, alphabetA, alphabetB);
         vI_nsb[b] = nsb.I;
         vSBA_nsb[b] = nsb.S_AB - nsb.S_A;
+        // BUG FIX: this was previously missing -- NMI_nsb_err was being
+        // taken from nsbMI()'s own analytic ratio-propagation formula
+        // (a completely different, more conservative methodology than
+        // the bootstrap used for I_nsb_err/SBA_nsb_err), which silently
+        // made NSB's NMI error bar inconsistent with its own I/S(B|A)
+        // error bars in the same comparison plot. Fixed to reuse this
+        // resample's already-computed nsb.S_A/nsb.S_B (no extra cost)
+        // and go through the same bootstrap-of-the-composite-quantity
+        // procedure as everything else in this loop.
+        vNMI_nsb[b] = nsb.I / std::min(nsb.S_A, nsb.S_B);
     }
 
     auto stdOnly = [](const std::vector<double>& v) {
@@ -484,6 +489,7 @@ AllEstimatorsResult bootstrapAllEstimators(const std::vector<int>& nA, const std
     r.SBA_nsb_err   = stdOnly(vSBA_nsb);
     r.NMI_naive_err = stdOnly(vNMI_naive);
     r.NMI_mm_err    = stdOnly(vNMI_mm);
+    r.NMI_nsb_err   = stdOnly(vNMI_nsb);
     return r;
 }
 
@@ -864,6 +870,24 @@ void plotMethodComparisonVsPt(const std::vector<double>& ptMid,
     TMultiGraph* mg1 = new TMultiGraph();
     mg1->Add(gN, "P"); mg1->Add(gM, "P"); mg1->Add(gS, "P"); mg1->Add(gB, "P");
     mg1->SetTitle("Method comparison: MI vs. p_{T} (bootstrap error bars);leading jet p_{T} (GeV);I(A:B) (nats)");
+
+    // Expand y-range with headroom above the highest point+error so the
+    // top-right legend has guaranteed clear space, regardless of how far
+    // up the error bars reach (this was previously overlapping data,
+    // e.g. the widest-error highest-pT bin).
+    {
+        double yMax = -1e300, yMin = 1e300;
+        for (int i = 0; i < n; ++i) {
+            yMax = std::max({yMax, I_naive[i]+I_naive_e[i], I_mm[i]+I_mm_e[i],
+                              I_shuffle[i]+I_shuffle_e[i], I_nsb[i]+I_nsb_e[i]});
+            yMin = std::min({yMin, I_naive[i]-I_naive_e[i], I_mm[i]-I_mm_e[i],
+                              I_shuffle[i]-I_shuffle_e[i], I_nsb[i]-I_nsb_e[i]});
+        }
+        double range = yMax - yMin;
+        mg1->SetMaximum(yMax + 0.35*range);
+        mg1->SetMinimum(yMin - 0.05*range);
+    }
+
     mg1->Draw("A");
     TLegend* leg1 = new TLegend(0.65, 0.68, 0.88, 0.88);
     leg1->AddEntry(gN, "naive", "lep");
@@ -889,6 +913,20 @@ void plotMethodComparisonVsPt(const std::vector<double>& ptMid,
     TMultiGraph* mg2 = new TMultiGraph();
     mg2->Add(gN2, "P"); mg2->Add(gM2, "P"); mg2->Add(gB2, "P");
     mg2->SetTitle("Method comparison: S(B|A) vs. p_{T} (bootstrap error bars);leading jet p_{T} (GeV);S(B|A) (nats)");
+
+    {
+        double yMax = -1e300, yMin = 1e300;
+        for (int i = 0; i < n; ++i) {
+            yMax = std::max({yMax, SBA_naive[i]+SBA_naive_e[i], SBA_mm[i]+SBA_mm_e[i],
+                              SBA_nsb[i]+SBA_nsb_e[i]});
+            yMin = std::min({yMin, SBA_naive[i]-SBA_naive_e[i], SBA_mm[i]-SBA_mm_e[i],
+                              SBA_nsb[i]-SBA_nsb_e[i]});
+        }
+        double range = yMax - yMin;
+        mg2->SetMaximum(yMax + 0.35*range);
+        mg2->SetMinimum(yMin - 0.05*range);
+    }
+
     mg2->Draw("A");
     TLegend* leg2 = new TLegend(0.65, 0.72, 0.88, 0.88);
     leg2->AddEntry(gN2, "naive", "lep");
@@ -932,6 +970,20 @@ void plotMethodComparisonNMIVsPt(const std::vector<double>& ptMid,
     TMultiGraph* mg = new TMultiGraph();
     mg->Add(gN, "P"); mg->Add(gM, "P"); mg->Add(gB, "P");
     mg->SetTitle("Method comparison: NMI vs. p_{T} (bootstrap error bars);leading jet p_{T} (GeV);I(A:B)/min(S_{A},S_{B})");
+
+    {
+        double yMax = -1e300, yMin = 1e300;
+        for (int i = 0; i < n; ++i) {
+            yMax = std::max({yMax, NMI_naive[i]+NMI_naive_e[i], NMI_mm[i]+NMI_mm_e[i],
+                              NMI_nsb[i]+NMI_nsb_e[i]});
+            yMin = std::min({yMin, NMI_naive[i]-NMI_naive_e[i], NMI_mm[i]-NMI_mm_e[i],
+                              NMI_nsb[i]-NMI_nsb_e[i]});
+        }
+        double range = yMax - yMin;
+        mg->SetMaximum(yMax + 0.35*range);
+        mg->SetMinimum(yMin - 0.05*range);
+    }
+
     mg->Draw("A");
     TLegend* leg = new TLegend(0.65, 0.68, 0.88, 0.88);
     leg->AddEntry(gN, "naive", "lep");
@@ -1031,6 +1083,18 @@ void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& 
     TMultiGraph* mg = new TMultiGraph();
     mg->Add(gA); mg->Add(gB); mg->Add(gAB);
     mg->SetTitle("NSB entropy vs. leading-jet p_{T};leading jet p_{T} (GeV);entropy (nats)");
+
+    {
+        double yMax = -1e300, yMin = 1e300;
+        for (int i = 0; i < n; ++i) {
+            yMax = std::max({yMax, S_A[i]+S_A_e[i], S_B[i]+S_B_e[i], S_AB[i]+S_AB_e[i]});
+            yMin = std::min({yMin, S_A[i]-S_A_e[i], S_B[i]-S_B_e[i], S_AB[i]-S_AB_e[i]});
+        }
+        double range = yMax - yMin;
+        mg->SetMaximum(yMax + 0.30*range);
+        mg->SetMinimum(yMin - 0.05*range);
+    }
+
     mg->Draw("APL");
     TLegend* leg1 = new TLegend(0.65, 0.7, 0.88, 0.88);
     leg1->AddEntry(gA, "S_{A} (leading)", "lep");

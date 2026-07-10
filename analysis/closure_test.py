@@ -333,6 +333,74 @@ def report_and_plot(results, I_true, SBA_true, NMI_true, N, out_prefix):
     plt.savefig(f"{out_prefix}_closure_test_NMI.png", dpi=150)
     print(f"\n  saved {out_prefix}_closure_test_NMI.png")
 
+    # ---- NEW: S(B|A) closure test (separate report + separate plot file;
+    # the I and NMI figures above are untouched). This is the actual
+    # quantum-witness quantity -- worth its own dedicated calibration
+    # check rather than inferring its behavior from I's. Purely
+    # diagnostic: no bias/coverage correction is applied anywhere here. ----
+    print(f"\n{'='*70}\nS(B|A) CLOSURE TEST (N={N:,} per repeat)\n{'='*70}")
+    print(f"S(B|A)_true (pseudo-truth) = {SBA_true:.5f} nats  "
+          f"(classically must be >=0; a well-calibrated pipeline should never "
+          f"call this negative at high significance when the true value is "
+          f"this solidly positive)\n")
+
+    sba_mean = results['SBA_nsb'].mean()
+    sba_std = results['SBA_nsb'].std(ddof=1)
+    sba_bias = sba_mean - SBA_true
+    print(f"{'method':>14} | {'mean estimate':>14} | {'std across reps':>16} | {'bias':>10} | {'bias/std':>9}")
+    print("-" * 78)
+    print(f"{'NSB':>14} | {sba_mean:>14.5f} | {sba_std:>16.5f} | {sba_bias:>+10.5f} | {sba_bias/sba_std:>+9.2f}")
+
+    sba_pulls = (results['SBA_nsb'] - SBA_true) / results['SBA_nsb_err']
+    print(f"\nNSB S(B|A) pull distribution (estimate - truth) / reported_sigma:")
+    print(f"  mean pull = {sba_pulls.mean():.3f}  (should be ~0 if unbiased)")
+    print(f"  std  pull = {sba_pulls.std(ddof=1):.3f}  (should be ~1 if uncertainty is well-calibrated)")
+    sba_frac_1sigma = np.mean(np.abs(sba_pulls) < 1.0)
+    sba_frac_2sigma = np.mean(np.abs(sba_pulls) < 2.0)
+    print(f"  fraction within +/-1 sigma: {sba_frac_1sigma:.1%}  (expect ~68% if calibrated)")
+    print(f"  fraction within +/-2 sigma: {sba_frac_2sigma:.1%}  (expect ~95% if calibrated)")
+    if results['SBA_nsb_err'].mean() > 0 and abs(sba_pulls.std(ddof=1) - 1.0) > 0.3:
+        direction = "UNDER-covering (error bars too small)" if sba_pulls.std(ddof=1) > 1.3 \
+            else "OVER-covering (error bars too large / conservative)"
+        print(f"  NOTE: pull std deviates from 1 by >0.3 -- NSB uncertainty on "
+              f"S(B|A) specifically appears {direction} for data shaped like "
+              f"this, at N={N:,}. Since S(B|A) is the quantity actually used "
+              f"for the quantum-witness claim, check this number directly "
+              f"rather than assuming it matches I's or NMI's calibration.")
+
+    fig3, axes3 = plt.subplots(1, 3, figsize=(16, 4.8))
+
+    ax = axes3[0]
+    ax.bar(['NSB'], [sba_mean], yerr=[sba_std], capsize=5, color='purple')
+    ax.axhline(SBA_true, color='black', ls='--', lw=2, label=f'$S(B|A)_{{true}}$={SBA_true:.4f}')
+    ax.axhline(0, color='red', ls=':', lw=1.5, label='classical floor')
+    ax.set_ylabel('recovered S(B|A) (nats)')
+    ax.set_title(f'S(B|A) closure test: recovery at N={N:,}\n(error bar: spread across {len(results["SBA_nsb"])} repeats)')
+    ax.legend(fontsize=8)
+
+    ax = axes3[1]
+    ax.hist(sba_pulls, bins=max(8, len(sba_pulls)//4), density=True, color='purple',
+            alpha=0.6, edgecolor='black', label='NSB S(B|A) pulls')
+    ax.plot(x, stats.norm.pdf(x), 'k--', lw=2, label='standard normal')
+    ax.set_xlabel(r'$(\hat{S}(B|A)_{NSB} - S(B|A)_{true}) / \sigma_{S(B|A)}$')
+    ax.set_ylabel('density')
+    ax.set_title('NSB S(B|A) calibration: pull distribution')
+    ax.legend(fontsize=9)
+
+    ax = axes3[2]
+    ax.errorbar(reps_idx, results['SBA_nsb'], yerr=results['SBA_nsb_err'], fmt='o',
+                color='purple', capsize=2, markersize=4, alpha=0.7)
+    ax.axhline(SBA_true, color='black', ls='--', lw=2, label='$S(B|A)_{true}$')
+    ax.axhline(0, color='red', ls=':', lw=1.5, label='classical floor')
+    ax.set_xlabel('repeat #')
+    ax.set_ylabel('NSB S(B|A) estimate ± bootstrap σ')
+    ax.set_title('NSB S(B|A) per-repeat estimates vs. truth')
+    ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig(f"{out_prefix}_closure_test_SBA.png", dpi=150)
+    print(f"\n  saved {out_prefix}_closure_test_SBA.png")
+
 
 # =============================================================================
 # Main
