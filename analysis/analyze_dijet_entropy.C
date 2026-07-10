@@ -36,14 +36,17 @@
 #include <TTree.h>
 #include <TH1D.h>
 #include <TH2D.h>
+#include <TProfile.h>
 #include <TCanvas.h>
 #include <TGraphErrors.h>
 #include <TMultiGraph.h>
 #include <TLegend.h>
+#include <TLine.h>
 #include <TRandom3.h>
 #include <TMath.h>
 #include <TString.h>
 #include <TSystem.h>
+#include <TStyle.h>
 
 #include <vector>
 #include <map>
@@ -291,7 +294,7 @@ NSBResult nsbEntropyAndVariance(const std::vector<int>& countsNonzero, long long
     return out;
 }
 
-struct NSBmiResult { double S_A, S_B, S_AB, I, S_A_err, S_B_err, S_AB_err, I_err; };
+struct NSBmiResult { double S_A, S_B, S_AB, I, S_A_err, S_B_err, S_AB_err, I_err, NMI, NMI_err; };
 
 NSBmiResult nsbMI(const std::vector<int>& nA, const std::vector<int>& nB,
                    long long alphabetA, long long alphabetB) {
@@ -309,6 +312,18 @@ NSBmiResult nsbMI(const std::vector<int>& nA, const std::vector<int>& nB,
     r.I = a.mean + b.mean - ab.mean;
     // independence approximation (conservative; see toy-study caveats)
     r.I_err = std::sqrt(a.var + b.var + ab.var);
+
+    // NMI = I / min(S_A,S_B): scale-comparable version of MI (classically
+    // in [0,1]; NMI>1 is the same classical-bound violation as
+    // S(B|A)<0). NMI_err via standard ratio error propagation (same
+    // independence-approximation spirit as I_err above): treats I and
+    // min(S_A,S_B) as uncorrelated, using whichever of S_A_err/S_B_err
+    // corresponds to the min.
+    double minS = std::min(r.S_A, r.S_B);
+    double minS_err = (r.S_A < r.S_B) ? r.S_A_err : r.S_B_err;
+    r.NMI = r.I / minS;
+    r.NMI_err = std::sqrt((r.I_err/minS)*(r.I_err/minS)
+                           + (r.I*minS_err/(minS*minS))*(r.I*minS_err/(minS*minS)));
     return r;
 }
 
@@ -371,14 +386,59 @@ struct AllEstimatorsResult {
     double SBA_naive, SBA_naive_err;
     double SBA_mm, SBA_mm_err;
     double SBA_nsb, SBA_nsb_err;
+    double NMI_naive, NMI_naive_err;
+    double NMI_mm, NMI_mm_err;
+    double NMI_nsb, NMI_nsb_err;
 };
 
 AllEstimatorsResult bootstrapAllEstimators(const std::vector<int>& nA, const std::vector<int>& nB,
                                             long long alphabetA, long long alphabetB,
                                             int nBoot, int nShufflesInner, TRandom3& rng) {
+    // Point estimates: computed ONCE, on the real (unresampled) data --
+    // exactly matching naiveMI/millerMadowMI/shuffleCorrectionMI/nsbMI
+    // used everywhere else in this macro. Bootstrap resampling below is
+    // used ONLY for uncertainty (std across resamples), never to redefine
+    // the central value. (Earlier version used the bootstrap MEAN as the
+    // point estimate for every method, which silently made the "NSB"
+    // value here disagree with the single-shot NSB value used in
+    // plotEntropyVsPt/plotMIVsPt/plotSBAVsPt -- fixed for consistency.)
     int N = (int)nA.size();
+
+    NaiveResult naivePoint = naiveMI(nA, nB);
+    double mmBiasPoint;
+    double I_mm_point = millerMadowMI(naivePoint, mmBiasPoint);
+    double S_A_mm_point = naivePoint.S_A - (naivePoint.K_A - 1) / (2.0 * naivePoint.N);
+    double S_AB_mm_point = naivePoint.S_AB - (naivePoint.K_AB - 1) / (2.0 * naivePoint.N);
+    double shBiasPoint, shBiasErrPoint;
+    double I_shuffle_point = shuffleCorrectionMI(nA, nB, nShufflesInner, rng, shBiasPoint, shBiasErrPoint);
+    NSBmiResult nsbPoint = nsbMI(nA, nB, alphabetA, alphabetB);
+
+    AllEstimatorsResult r;
+    r.I_naive   = naivePoint.I;
+    r.SBA_naive = naivePoint.S_AB - naivePoint.S_A;
+    r.I_mm      = I_mm_point;
+    r.SBA_mm    = S_AB_mm_point - S_A_mm_point;
+    r.I_shuffle = I_shuffle_point;
+    r.I_nsb     = nsbPoint.I;
+    r.SBA_nsb   = nsbPoint.S_AB - nsbPoint.S_A;
+
+    // NMI point estimates. NSB's NMI (value AND error) is copied directly
+    // from nsbPoint -- nsbMI() already computes NMI analytically and
+    // consistently with everything else that calls nsbMI(), so no
+    // separate bootstrap is needed (and avoids introducing a NEW
+    // value/error inconsistency for this quantity, unlike I_nsb/SBA_nsb
+    // above whose error bars DO come from this function's own bootstrap
+    // loop below -- a pre-existing asymmetry in this macro, not
+    // introduced by the NMI addition).
+    r.NMI_naive = r.I_naive / std::min(naivePoint.S_A, naivePoint.S_B);
+    r.NMI_mm    = I_mm_point / std::min(S_A_mm_point, naivePoint.S_B - (naivePoint.K_B-1)/(2.0*naivePoint.N));
+    r.NMI_nsb     = nsbPoint.NMI;
+    r.NMI_nsb_err = nsbPoint.NMI_err;
+
+    // ---- uncertainty: spread over bootstrap resamples ----
     std::vector<double> vI_naive(nBoot), vI_mm(nBoot), vI_shuffle(nBoot), vI_nsb(nBoot);
     std::vector<double> vSBA_naive(nBoot), vSBA_mm(nBoot), vSBA_nsb(nBoot);
+    std::vector<double> vNMI_naive(nBoot), vNMI_mm(nBoot);
 
     for (int b = 0; b < nBoot; ++b) {
         std::vector<int> rA(N), rB(N);
@@ -391,12 +451,15 @@ AllEstimatorsResult bootstrapAllEstimators(const std::vector<int>& nA, const std
         NaiveResult naive = naiveMI(rA, rB);
         vI_naive[b] = naive.I;
         vSBA_naive[b] = naive.S_AB - naive.S_A;
+        vNMI_naive[b] = naive.I / std::min(naive.S_A, naive.S_B);
 
         double mmBias;
         vI_mm[b] = millerMadowMI(naive, mmBias);
         double S_A_mm = naive.S_A - (naive.K_A - 1) / (2.0 * naive.N);
         double S_AB_mm = naive.S_AB - (naive.K_AB - 1) / (2.0 * naive.N);
+        double S_B_mm = naive.S_B - (naive.K_B - 1) / (2.0 * naive.N);
         vSBA_mm[b] = S_AB_mm - S_A_mm;
+        vNMI_mm[b] = vI_mm[b] / std::min(S_A_mm, S_B_mm);
 
         double shBias, shBiasErr;
         vI_shuffle[b] = shuffleCorrectionMI(rA, rB, nShufflesInner, rng, shBias, shBiasErr);
@@ -406,20 +469,21 @@ AllEstimatorsResult bootstrapAllEstimators(const std::vector<int>& nA, const std
         vSBA_nsb[b] = nsb.S_AB - nsb.S_A;
     }
 
-    auto meanStd = [](const std::vector<double>& v, double& mean, double& sigma) {
-        mean = 0; for (double x : v) mean += x; mean /= v.size();
+    auto stdOnly = [](const std::vector<double>& v) {
+        double mean = 0; for (double x : v) mean += x; mean /= v.size();
         double var = 0; for (double x : v) var += (x-mean)*(x-mean); var /= (v.size()-1);
-        sigma = std::sqrt(var);
+        return std::sqrt(var);
     };
 
-    AllEstimatorsResult r;
-    meanStd(vI_naive, r.I_naive, r.I_naive_err);
-    meanStd(vI_mm, r.I_mm, r.I_mm_err);
-    meanStd(vI_shuffle, r.I_shuffle, r.I_shuffle_err);
-    meanStd(vI_nsb, r.I_nsb, r.I_nsb_err);
-    meanStd(vSBA_naive, r.SBA_naive, r.SBA_naive_err);
-    meanStd(vSBA_mm, r.SBA_mm, r.SBA_mm_err);
-    meanStd(vSBA_nsb, r.SBA_nsb, r.SBA_nsb_err);
+    r.I_naive_err   = stdOnly(vI_naive);
+    r.I_mm_err      = stdOnly(vI_mm);
+    r.I_shuffle_err = stdOnly(vI_shuffle);
+    r.I_nsb_err     = stdOnly(vI_nsb);
+    r.SBA_naive_err = stdOnly(vSBA_naive);
+    r.SBA_mm_err    = stdOnly(vSBA_mm);
+    r.SBA_nsb_err   = stdOnly(vSBA_nsb);
+    r.NMI_naive_err = stdOnly(vNMI_naive);
+    r.NMI_mm_err    = stdOnly(vNMI_mm);
     return r;
 }
 
@@ -580,10 +644,12 @@ void plotJointMultiplicityDistribution(const std::vector<int>& nA, const std::ve
     c->Divide(2, 1);
 
     c->cd(1);
+    gPad->SetRightMargin(0.16);  // room for the COLZ z-axis palette
     h2->SetStats(0);
     h2->Draw("COLZ");
 
     c->cd(2);
+    gPad->SetRightMargin(0.16);
     TH2D* h2sqrt = (TH2D*)h2->Clone("hJointSqrt");
     for (int bx = 1; bx <= h2sqrt->GetNbinsX(); ++bx)
         for (int by = 1; by <= h2sqrt->GetNbinsY(); ++by)
@@ -599,6 +665,77 @@ void plotJointMultiplicityDistribution(const std::vector<int>& nA, const std::ve
               << ", filled fraction = " << (double)occupied/fullGrid << "\n";
     if ((double)occupied/fullGrid < 0.1)
         std::cout << "  NOTE: joint grid is <10% filled -- sparse regime, NSB matters most here.\n";
+}
+
+void plotMultiplicityVsPtProfile(const std::vector<double>& jet1Pt, const std::vector<double>& jet2Pt,
+                                  const std::vector<int>& nA, const std::vector<int>& nB,
+                                  const TString& outPrefix, int nBins = 15) {
+    // DIAGNOSTIC: raw profile of mean multiplicity vs pT, bypassing all
+    // NSB/entropy/quantile-binning machinery entirely (TProfile just
+    // computes per-bin mean +/- standard error directly from the tree).
+    // See analyze_dijet_entropy.py's plot_multiplicity_vs_pt_profile()
+    // docstring for how to interpret this against the entropy-vs-pT plots.
+
+    int N = jet1Pt.size();
+    double sumPtA=0, sumPtA2=0, sumMultA=0, sumPtMultA=0;
+    for (int i = 0; i < N; ++i) {
+        sumPtA += jet1Pt[i]; sumPtA2 += jet1Pt[i]*jet1Pt[i];
+        sumMultA += nA[i]; sumPtMultA += jet1Pt[i]*nA[i];
+    }
+    double meanPtA = sumPtA/N, meanMultA = sumMultA/N;
+    double covA = sumPtMultA/N - meanPtA*meanMultA;
+    double varPtA = sumPtA2/N - meanPtA*meanPtA;
+    double sdMultA = 0; for (int i=0;i<N;++i) sdMultA += (nA[i]-meanMultA)*(nA[i]-meanMultA);
+    sdMultA = std::sqrt(sdMultA/N);
+    double rA = covA / (std::sqrt(varPtA) * sdMultA);
+
+    int NB = jet2Pt.size();
+    double sumPtB=0, sumPtB2=0, sumMultB=0, sumPtMultB=0;
+    for (int i = 0; i < NB; ++i) {
+        sumPtB += jet2Pt[i]; sumPtB2 += jet2Pt[i]*jet2Pt[i];
+        sumMultB += nB[i]; sumPtMultB += jet2Pt[i]*nB[i];
+    }
+    double meanPtB = sumPtB/NB, meanMultB = sumMultB/NB;
+    double covB = sumPtMultB/NB - meanPtB*meanMultB;
+    double varPtB = sumPtB2/NB - meanPtB*meanPtB;
+    double sdMultB = 0; for (int i=0;i<NB;++i) sdMultB += (nB[i]-meanMultB)*(nB[i]-meanMultB);
+    sdMultB = std::sqrt(sdMultB/NB);
+    double rB = covB / (std::sqrt(varPtB) * sdMultB);
+
+    std::cout << "  Raw Pearson correlation, jet1_pt vs N_A: " << rA << "\n";
+    std::cout << "  Raw Pearson correlation, jet2_pt vs N_B: " << rB << "\n";
+    if (std::abs(rA) < 0.05)
+        std::cout << "  NOTE: |corr| < 0.05 -- essentially no linear relationship between "
+                  << "jet 1 pT and its own multiplicity in this dataset. If you physically "
+                  << "expect one, this points to the generator/tree, not the pT-binning "
+                  << "downstream.\n";
+
+    double pt1Min = *std::min_element(jet1Pt.begin(), jet1Pt.end());
+    double pt1Max = *std::max_element(jet1Pt.begin(), jet1Pt.end());
+    double pt2Min = *std::min_element(jet2Pt.begin(), jet2Pt.end());
+    double pt2Max = *std::max_element(jet2Pt.begin(), jet2Pt.end());
+
+    TProfile* profA = new TProfile("profA", Form("jet 1: N_A vs p_{T} (r=%.3f);jet p_{T} (GeV);mean charged multiplicity", rA),
+                                    nBins, pt1Min, pt1Max);
+    for (int i = 0; i < N; ++i) profA->Fill(jet1Pt[i], nA[i]);
+
+    TProfile* profB = new TProfile("profB", Form("jet 2: N_B vs p_{T} (r=%.3f);jet p_{T} (GeV);mean charged multiplicity", rB),
+                                    nBins, pt2Min, pt2Max);
+    for (int i = 0; i < NB; ++i) profB->Fill(jet2Pt[i], nB[i]);
+
+    TCanvas* c = new TCanvas("cMultVsPt", "Multiplicity vs pT profile", 1200, 500);
+    c->Divide(2, 1);
+    c->cd(1);
+    profA->SetMarkerStyle(20); profA->SetMarkerColor(kBlue+1); profA->SetLineColor(kBlue+1);
+    profA->SetStats(0);
+    profA->Draw("E1");
+    c->cd(2);
+    profB->SetMarkerStyle(20); profB->SetMarkerColor(kRed+1); profB->SetLineColor(kRed+1);
+    profB->SetStats(0);
+    profB->Draw("E1");
+
+    c->SaveAs(outPrefix + "_mult_vs_pt_profile.png");
+    std::cout << "  saved " << outPrefix << "_mult_vs_pt_profile.png\n";
 }
 
 void plotPtDistributions(const std::vector<double>& jet1Pt, const std::vector<double>& jet2Pt,
@@ -655,10 +792,12 @@ void plotJointPtDistribution(const std::vector<double>& jet1Pt, const std::vecto
     c->Divide(2, 1);
 
     c->cd(1);
+    gPad->SetRightMargin(0.16);  // room for the COLZ z-axis palette
     h2->SetStats(0);
     h2->Draw("COLZ");
 
     c->cd(2);
+    gPad->SetRightMargin(0.16);
     TH2D* h2sqrt = (TH2D*)h2->Clone("hJointPtSqrt");
     for (int bx = 1; bx <= h2sqrt->GetNbinsX(); ++bx)
         for (int by = 1; by <= h2sqrt->GetNbinsY(); ++by)
@@ -764,6 +903,49 @@ void plotMethodComparisonVsPt(const std::vector<double>& ptMid,
     std::cout << "  saved " << outPrefix << "_method_comparison_SBA_vs_pt.png\n";
 }
 
+void plotMethodComparisonNMIVsPt(const std::vector<double>& ptMid,
+                                  const std::vector<double>& NMI_naive, const std::vector<double>& NMI_naive_e,
+                                  const std::vector<double>& NMI_mm, const std::vector<double>& NMI_mm_e,
+                                  const std::vector<double>& NMI_nsb, const std::vector<double>& NMI_nsb_e,
+                                  const TString& outPrefix) {
+    // NEW: compare naive/Miller-Madow/NSB NMI = I/min(S_A,S_B) vs pT (no
+    // shuffle, same reason as the S(B|A) comparison). Separate new plot
+    // file; plotMethodComparisonVsPt above is untouched.
+    int n = ptMid.size();
+    std::vector<double> zeros(n, 0.0);
+    double span = (n > 1) ? (ptMid.back() - ptMid.front()) / n : 1.0;
+    std::vector<double> ptN(n), ptM(n), ptB(n);
+    for (int i = 0; i < n; ++i) {
+        ptN[i] = ptMid[i] - 0.12*span;
+        ptM[i] = ptMid[i];
+        ptB[i] = ptMid[i] + 0.12*span;
+    }
+
+    TCanvas* c = new TCanvas("cNMICompare", "NMI method comparison vs pT", 800, 550);
+    TGraphErrors* gN = new TGraphErrors(n, ptN.data(), NMI_naive.data(), zeros.data(), NMI_naive_e.data());
+    TGraphErrors* gM = new TGraphErrors(n, ptM.data(), NMI_mm.data(), zeros.data(), NMI_mm_e.data());
+    TGraphErrors* gB = new TGraphErrors(n, ptB.data(), NMI_nsb.data(), zeros.data(), NMI_nsb_e.data());
+    gN->SetMarkerStyle(20); gN->SetMarkerColor(kRed+1);    gN->SetLineColor(kRed+1);
+    gM->SetMarkerStyle(21); gM->SetMarkerColor(kOrange+1); gM->SetLineColor(kOrange+1);
+    gB->SetMarkerStyle(23); gB->SetMarkerColor(kViolet+1); gB->SetLineColor(kViolet+1);
+
+    TMultiGraph* mg = new TMultiGraph();
+    mg->Add(gN, "P"); mg->Add(gM, "P"); mg->Add(gB, "P");
+    mg->SetTitle("Method comparison: NMI vs. p_{T} (bootstrap error bars);leading jet p_{T} (GeV);I(A:B)/min(S_{A},S_{B})");
+    mg->Draw("A");
+    TLegend* leg = new TLegend(0.65, 0.68, 0.88, 0.88);
+    leg->AddEntry(gN, "naive", "lep");
+    leg->AddEntry(gM, "Miller-Madow", "lep");
+    leg->AddEntry(gB, "NSB", "lep");
+    leg->Draw();
+    TLine* oneLine = new TLine(ptMid.front()-span, 1, ptMid.back()+span, 1);
+    oneLine->SetLineColor(kRed);
+    oneLine->SetLineStyle(3);
+    oneLine->Draw();
+    c->SaveAs(outPrefix + "_method_comparison_NMI_vs_pt.png");
+    std::cout << "  saved " << outPrefix << "_method_comparison_NMI_vs_pt.png\n";
+}
+
 void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& nB,
                              const std::vector<double>& jetPt,
                              long long alphabetA, long long alphabetB,
@@ -772,11 +954,12 @@ void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& 
                              int nShufflesInner = 30, TRandom3* rngPtr = nullptr) {
     std::vector<double> edges = quantileBinEdges(jetPt, nBins);
 
-    std::vector<double> ptMid, S_A, S_A_e, S_B, S_B_e, S_AB, S_AB_e, I, I_e, SBA, SBA_e;
+    std::vector<double> ptMid, S_A, S_A_e, S_B, S_B_e, S_AB, S_AB_e, I, I_e, SBA, SBA_e, NMI, NMI_e;
 
     // multi-method comparison accumulators (only filled if compareMethods)
     std::vector<double> cI_naive, cI_naive_e, cI_mm, cI_mm_e, cI_shuffle, cI_shuffle_e, cI_nsb, cI_nsb_e;
     std::vector<double> cSBA_naive, cSBA_naive_e, cSBA_mm, cSBA_mm_e, cSBA_nsb, cSBA_nsb_e;
+    std::vector<double> cNMI_naive, cNMI_naive_e, cNMI_mm, cNMI_mm_e, cNMI_nsb, cNMI_nsb_e;
 
     std::cout << "\n  pT range        |     N |     S_A      |     S_B      |    S_AB      |    I(A:B)    |    S(B|A)\n";
     std::cout << "  --------------------------------------------------------------------------------------------------\n";
@@ -809,6 +992,7 @@ void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& 
         S_AB.push_back(r.S_AB); S_AB_e.push_back(r.S_AB_err);
         I.push_back(r.I); I_e.push_back(r.I_err);
         SBA.push_back(sba); SBA_e.push_back(sbaErr);
+        NMI.push_back(r.NMI); NMI_e.push_back(r.NMI_err);
 
         printf("  [%5.1f,%5.1f) | %5d | %6.3f+/-%5.3f | %6.3f+/-%5.3f | %6.3f+/-%5.3f | %6.3f+/-%5.3f | %6.3f+/-%5.3f\n",
                lo, hi, n, r.S_A, r.S_A_err, r.S_B, r.S_B_err, r.S_AB, r.S_AB_err, r.I, r.I_err, sba, sbaErr);
@@ -823,6 +1007,9 @@ void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& 
             cSBA_naive.push_back(boot.SBA_naive); cSBA_naive_e.push_back(boot.SBA_naive_err);
             cSBA_mm.push_back(boot.SBA_mm); cSBA_mm_e.push_back(boot.SBA_mm_err);
             cSBA_nsb.push_back(boot.SBA_nsb); cSBA_nsb_e.push_back(boot.SBA_nsb_err);
+            cNMI_naive.push_back(boot.NMI_naive); cNMI_naive_e.push_back(boot.NMI_naive_err);
+            cNMI_mm.push_back(boot.NMI_mm); cNMI_mm_e.push_back(boot.NMI_mm_err);
+            cNMI_nsb.push_back(boot.NMI_nsb); cNMI_nsb_e.push_back(boot.NMI_nsb_err);
         }
     }
 
@@ -875,12 +1062,33 @@ void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& 
     c3->SaveAs(outPrefix + "_SBA_vs_pt.png");
     std::cout << "  saved " << outPrefix << "_SBA_vs_pt.png\n";
 
+    // --- NMI = I/min(S_A,S_B) vs pT (NEW; separate file, c1/c2/c3 untouched) ---
+    TCanvas* c4 = new TCanvas("cNMIPt", "NMI vs pT", 800, 550);
+    TGraphErrors* gNMI = new TGraphErrors(n, ptMid.data(), NMI.data(), zeros.data(), NMI_e.data());
+    gNMI->SetLineColor(kGreen+2); gNMI->SetMarkerColor(kGreen+2); gNMI->SetMarkerStyle(20);
+    gNMI->SetTitle("Normalized mutual information vs. leading-jet p_{T};leading jet p_{T} (GeV);I(A:B)/min(S_{A},S_{B}), NSB");
+    gNMI->Draw("APL");
+    TLine* zeroLineNMI = new TLine(ptMid.front(), 0, ptMid.back(), 0);
+    zeroLineNMI->SetLineColor(kGray+1);
+    zeroLineNMI->Draw();
+    TLine* oneLineNMI = new TLine(ptMid.front(), 1, ptMid.back(), 1);
+    oneLineNMI->SetLineColor(kRed);
+    oneLineNMI->SetLineStyle(3);
+    oneLineNMI->Draw();
+    TLegend* legNMI = new TLegend(0.65, 0.15, 0.88, 0.28);
+    legNMI->AddEntry(oneLineNMI, "classical bound (NMI=1)", "l");
+    legNMI->Draw();
+    c4->SaveAs(outPrefix + "_NMI_vs_pt.png");
+    std::cout << "  saved " << outPrefix << "_NMI_vs_pt.png\n";
+
     if (compareMethods) {
         plotMethodComparisonVsPt(ptMid,
                                   cI_naive, cI_naive_e, cI_mm, cI_mm_e,
                                   cI_shuffle, cI_shuffle_e, cI_nsb, cI_nsb_e,
                                   cSBA_naive, cSBA_naive_e, cSBA_mm, cSBA_mm_e,
                                   cSBA_nsb, cSBA_nsb_e, outPrefix);
+        plotMethodComparisonNMIVsPt(ptMid, cNMI_naive, cNMI_naive_e,
+                                     cNMI_mm, cNMI_mm_e, cNMI_nsb, cNMI_nsb_e, outPrefix);
     }
 }
 
@@ -935,11 +1143,32 @@ void plotSummaryBarChart(double I_naive, double I_naive_err,
 void analyze_dijet_entropy(const char* rootFile, const char* levelIn = "truth",
                             long long alphabet = 80, int nBoot = 200, int ptBins = 4,
                             bool compareMethods = true, int nBootCompare = 50,
-                            int nShufflesInner = 30) {
+                            int nShufflesInner = 30,
+                            const char* figsDir = "/Users/zhoudunmingtu/bnl_work/Work/MODELS/EBCs_toyMC/analysis/figs") {
     TString level(levelIn);
 
-    gSystem->mkdir("figs", kTRUE);  // kTRUE = create parent dirs too if needed; no-op if it exists
-    TString outPrefix = TString::Format("figs/dijet_entropy_result_root_%s", levelIn);
+    // ---- global plotting style: larger margins + axis title offsets so
+    // longer axis titles (e.g. "NMI = I(A:B)/min(S_A,S_B), NSB",
+    // "probability density (GeV^{-1})") aren't clipped by the canvas
+    // edge -- ROOT's default margins are too tight for these. Set once,
+    // before any canvas is created; applies to all pads/histograms/
+    // graphs created afterward (including sub-pads from ->Divide()).
+    // The two COLZ (2D) plotting functions override the right margin
+    // locally to leave room for the z-axis palette.
+    gStyle->SetPadLeftMargin(0.15);
+    gStyle->SetPadRightMargin(0.06);
+    gStyle->SetPadBottomMargin(0.13);
+    gStyle->SetPadTopMargin(0.09);
+    gStyle->SetTitleOffset(1.5, "Y");
+    gStyle->SetTitleOffset(1.1, "X");
+    gStyle->SetTitleSize(0.045, "XYZ");
+    gStyle->SetLabelSize(0.035, "XYZ");
+    gStyle->SetTitleSize(0.05, "T");   // canvas/pad title text
+
+    TString figsDirStr(figsDir);
+    gSystem->mkdir(figsDirStr, kTRUE);  // kTRUE = create parent dirs too if needed; no-op if it exists
+    TString outPrefix = figsDirStr + TString::Format("/dijet_entropy_result_root_%s", levelIn);
+    std::cout << "Figures will be saved under: " << figsDirStr << "\n";
 
     TRandom3 rng(12345);
 
@@ -977,6 +1206,10 @@ void analyze_dijet_entropy(const char* rootFile, const char* levelIn = "truth",
     printf("  shuffle-corr.  : %.4f nats  (bias estimate: %.4f +/- %.4f)\n", I_sh, shBias, shBiasErr);
     printf("  NSB            : %.4f +/- %.4f nats   <-- recommended\n", nsb.I, nsb.I_err);
 
+    std::cout << "\n--- NMI = I(A:B) / min(S_A,S_B) (scale-comparable; classical bound: NMI<=1) ---\n";
+    printf("  NSB            : %.4f +/- %.4f   (S_A=%.4f, S_B=%.4f, min=%.4f)\n",
+           nsb.NMI, nsb.NMI_err, nsb.S_A, nsb.S_B, std::min(nsb.S_A, nsb.S_B));
+
     // ---- conditional entropy ----
     std::cout << "\n--- Conditional entropy S(B|A) = S_AB - S_A (quantum witness) ---\n";
     double SBA_nsb, sigmaAnalytic;
@@ -1012,6 +1245,12 @@ void analyze_dijet_entropy(const char* rootFile, const char* levelIn = "truth",
     std::cout << "\n--- i) Jet pT distributions ---\n";
     plotPtDistributions(data.jetPt, data.jet2Pt, outPrefix);
     plotJointPtDistribution(data.jetPt, data.jet2Pt, outPrefix);
+
+    // ---- DIAGNOSTIC: raw multiplicity-vs-pT correlation, bypassing all
+    // entropy/NSB/binning machinery. Look at this BEFORE trusting anything
+    // downstream that bins by pT.
+    std::cout << "\n--- DIAGNOSTIC: raw multiplicity vs. pT profile (bypasses NSB/binning) ---\n";
+    plotMultiplicityVsPtProfile(data.jetPt, data.jet2Pt, data.nA, data.nB, outPrefix);
 
     // ---- pT-differential ----
     std::cout << "\n--- ii)-iv) Differential vs. leading-jet pT (" << ptBins << " quantile bins) ---\n";

@@ -1,6 +1,6 @@
-// main_dijet_pp200.cc
+// main_dijet_pp_full.cc
 //
-// Generate pp collisions at sqrt(s) = 200 GeV (RHIC/STAR energy) and, for
+// Generate pp collisions at sqrt(s) = 14000 GeV (LHC energy) and, for
 // each generator-level back-to-back dijet event:
 //
 //   (a) save the full list of charged, final-state (stable) hadrons
@@ -21,7 +21,7 @@
 //
 // Physics choices (all overridable via command-line flags, see parseArgs
 // below):
-//   - sqrt(s) = 200 GeV, HardQCD:all = on, pTHat cut to focus on genuine
+//   - sqrt(s) = 14000 GeV, HardQCD:all = on, pTHat cut to focus on genuine
 //     dijet events
 //   - anti-kT jets (SlowJet power = -1), R = 0.4, CHARGED final-state
 //     particles only (SlowJet `select = 3`)
@@ -76,6 +76,12 @@ using namespace Pythia8;
 // =====================================================================
 double trackEfficiency(double pT, double pTMin, double effPlateau, double pTScale) {
     if (pT <= pTMin) return 0.0;
+    // effPlateau==1.0 is used for the TRUTH-level pT floor (see
+    // slowJetTruth below), where we want a clean hard cutoff -- not a
+    // smoothed detector-like turn-on, which would asymptote toward but
+    // never quite reach 1.0 right at threshold, introducing a sliver of
+    // unintended dilution exactly where we don't want any.
+    if (effPlateau >= 1.0) return 1.0;
     return effPlateau * (1.0 - std::exp(-(pT - pTMin) / pTScale));
 }
 
@@ -114,13 +120,20 @@ private:
 // Minimal command-line argument parsing: --flag value
 // ---------------------------------------------------------------------
 struct Config {
-    long long nEvents      = 10000;  // number of GENERATED events to try
-    double pTHatMin        = 40;      // GeV, parton-level hard-process cut
+    long long nEvents      = 1000000;  // number of GENERATED events to try
+    double pTHatMin        = 50.;      // GeV, parton-level hard-process cut
     double jetR            = 0.4;      // anti-kT radius (shared, both levels)
-    double jetPtMin        = 20.0;      // GeV, minimum jet pT (shared, both levels)
+    double jetPtMin        = 30;      // GeV, minimum jet pT (shared, both levels)
     double dPhiCut         = 0.4;      // back-to-back cut, both levels
 
-    // truth level (wide, idealized)
+    // truth level (wide, idealized -- but NOT zero-threshold: see
+    // trkPtMinTruth below, added after finding that a literal zero
+    // threshold lets soft, largely jet-pT-independent particle production
+    // dominate the constituent count and mask the genuine hard-fragmentation
+    // pT dependence. Every real jet-fragmentation measurement, and even
+    // generator-level "truth" comparisons in the literature, impose some
+    // minimum charged-track pT for exactly this reason.)
+    double trkPtMinTruth    = 0.10;    // GeV -- modest floor, no efficiency loss
     double etaMaxConstTruth = 4.0;
     double yMaxJetTruth      = 3.0;
 
@@ -132,7 +145,7 @@ struct Config {
     double trkEffPtScale   = 0.15;     // GeV, efficiency turn-on scale
 
     int    seed             = 42;
-    std::string outFile     = "pythia_dijet_pp200_full.root";
+    std::string outFile     = "pythia_dijet_pp14000_full.root";
 };
 
 Config parseArgs(int argc, char* argv[]) {
@@ -145,6 +158,7 @@ Config parseArgs(int argc, char* argv[]) {
         else if (flag == "--jetR")           c.jetR             = std::atof(val.c_str());
         else if (flag == "--jetPtMin")       c.jetPtMin         = std::atof(val.c_str());
         else if (flag == "--dPhiCut")        c.dPhiCut          = std::atof(val.c_str());
+        else if (flag == "--trkPtMinTruth")  c.trkPtMinTruth    = std::atof(val.c_str());
         else if (flag == "--etaMaxConstTruth") c.etaMaxConstTruth = std::atof(val.c_str());
         else if (flag == "--yMaxJetTruth")   c.yMaxJetTruth     = std::atof(val.c_str());
         else if (flag == "--trkPtMinDet")    c.trkPtMinDet      = std::atof(val.c_str());
@@ -163,7 +177,7 @@ int main(int argc, char* argv[]) {
     Config cfg = parseArgs(argc, argv);
 
     std::cout << "==================================================\n"
-               << " PYTHIA 8 pp dijet generator, sqrt(s) = 200 GeV\n"
+               << " PYTHIA 8 pp dijet generator, sqrt(s) = 14000 GeV\n"
                << " (truth-level + detector-level jet reconstruction)\n"
                << "==================================================\n"
                << "  nEvents (attempted)     : " << cfg.nEvents         << "\n"
@@ -172,6 +186,7 @@ int main(int argc, char* argv[]) {
                << "  jet pT min (shared)     : " << cfg.jetPtMin        << " GeV\n"
                << "  back-to-back cut        : |dphi - pi| < " << cfg.dPhiCut << "\n"
                << "  --- truth level ---\n"
+               << "  track pT min (floor)    : " << cfg.trkPtMinTruth << " GeV\n"
                << "  constituent |eta| max   : " << cfg.etaMaxConstTruth << "\n"
                << "  jet |y| max             : " << cfg.yMaxJetTruth     << "\n"
                << "  --- detector level ---\n"
@@ -191,7 +206,7 @@ int main(int argc, char* argv[]) {
 
     pythia.readString("Beams:idA = 2212");
     pythia.readString("Beams:idB = 2212");
-    pythia.readString("Beams:eCM = 200.");
+    pythia.readString("Beams:eCM = 14000.");
 
     pythia.readString("HardQCD:all = on");
     pythia.readString("PhaseSpace:pTHatMin = " + std::to_string(cfg.pTHatMin));
@@ -200,10 +215,13 @@ int main(int argc, char* argv[]) {
     pythia.readString("Random:seed = " + std::to_string(cfg.seed));
     pythia.readString("PartonLevel:MPI = off");
 
-    pythia.readString("Next:numberShowInfo = 0");
-    pythia.readString("Next:numberShowProcess = 0");
-    pythia.readString("Next:numberShowEvent = 0");
-    pythia.readString("Print:quiet = on");
+    // pythia.readString("Next:numberShowInfo = 0");
+    // pythia.readString("Next:numberShowProcess = 0");
+    // pythia.readString("Next:numberShowEvent = 0");
+    // pythia.readString("Print:quiet = on");
+
+    pythia.readString("Tune:pp = 14"); 
+
 
     if (!pythia.init()) {
         std::cerr << "ERROR: Pythia failed to initialize.\n";
@@ -213,10 +231,24 @@ int main(int argc, char* argv[]) {
     // -------------------------------------------------------------
     // Jet finders
     // -------------------------------------------------------------
-    // Truth level: wide/idealized acceptance, built-in select=3 (charged
-    // final-state only) + etaMax is sufficient, no hook needed.
-    SlowJet slowJetTruth(-1, cfg.jetR, cfg.jetPtMin, cfg.etaMaxConstTruth,
-                          /*select=*/3, /*massSet=*/1);
+    // Truth level: wide/idealized acceptance, but NOT zero-threshold --
+    // uses the SAME hook mechanism as detector level, just with
+    // effPlateau=1.0 (no efficiency loss) and a modest pT floor
+    // (trkPtMinTruth, default 0.10 GeV) instead of the built-in
+    // select=3/etaMax path. This is the fix for the bug where an earlier
+    // version of this code used NO constituent pT threshold at all,
+    // which let soft, largely jet-pT-independent particle production
+    // (beam remnants, soft ISR) dominate the multiplicity count and mask
+    // the genuine hard-fragmentation pT dependence -- see chat history /
+    // companion note for the full diagnosis (ALICE arXiv:2311.13322
+    // confirms mean charged multiplicity should rise monotonically with
+    // jet pT; a literal zero pT threshold is not how any real
+    // "truth"-level comparison is defined in the literature).
+    DetectorTrackHook truthHook(cfg.trkPtMinTruth, cfg.etaMaxConstTruth,
+                                 /*effPlateau=*/1.0, /*pTScale=*/0.05,
+                                 &pythia.rndm);
+    SlowJet slowJetTruth(-1, cfg.jetR, cfg.jetPtMin, 25.0,
+                          /*select=*/3, /*massSet=*/1, &truthHook);
 
     // Detector level: constructor etaMax left generous (25 = effectively
     // unlimited); the REAL pT/eta/efficiency cuts are enforced entirely
@@ -232,7 +264,7 @@ int main(int argc, char* argv[]) {
     // ROOT output
     // -------------------------------------------------------------
     TFile* fout = new TFile(cfg.outFile.c_str(), "RECREATE");
-    TTree* tree = new TTree("dijet", "PYTHIA8 pp 200 GeV back-to-back charged dijets: truth + detector level");
+    TTree* tree = new TTree("dijet", "PYTHIA8 pp 14000 GeV back-to-back charged dijets: truth + detector level");
 
     Double_t pTHat, weight;
 
@@ -368,6 +400,14 @@ int main(int argc, char* argv[]) {
             std::cout << "  ... " << nAccepted << " truth dijet events accepted "
                       << "(from " << nGenerated << " generated; "
                       << nWithDetDijet << " also have a detector-level dijet)\n";
+
+            // Checkpoint: flush the tree's buffered data and finalize the
+            // file's key directory NOW, so that if this job gets killed
+            // (walltime limit, OOM, crash) before reaching the normal
+            // end-of-program Write()/Close() below, everything accepted
+            // so far is still safely on disk and readable -- rather than
+            // silently lost, producing an empty-looking ROOT file.
+            tree->AutoSave("SaveSelf");
         }
     }
 

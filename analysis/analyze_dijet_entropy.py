@@ -186,84 +186,120 @@ def nsb_entropy_from_counts(counts_nonzero, K, beta_grid=None):
     return S_nsb
 
 
-def nsb_MI(n_a, n_b, alphabet_a, alphabet_b):
-    va, ca = np.unique(n_a, return_counts=True)
-    vb, cb = np.unique(n_b, return_counts=True)
-    pairs = np.stack([n_a, n_b], axis=1)
-    _, cab = np.unique(pairs, axis=0, return_counts=True)
+def nsb_all(n_a, n_b, alphabet_a, alphabet_b, n_boot=200, rng=None):
+    """
+    THE single canonical NSB computation for this script: S_A, S_B, S_AB,
+    I(A:B), S(B|A), and NMI = I/min(S_A,S_B) (scale-comparable normalized
+    MI -- see chat notes on why min-normalization matches the classical
+    I<=min(S_A,S_B) bound already used as the quantum witness). Every
+    place in this script that reports an NSB number calls this one
+    function, so any two plots/tables showing "NSB" are guaranteed to
+    show the identical value and error bar -- not just coincidentally
+    consistent, but structurally unable to disagree.
 
-    K_joint = alphabet_a * alphabet_b
-    S_A_nsb = nsb_entropy_from_counts(ca, alphabet_a)
-    S_B_nsb = nsb_entropy_from_counts(cb, alphabet_b)
-    S_AB_nsb = nsb_entropy_from_counts(cab, K_joint)
+    Point estimates: single-shot analytic NSB posterior mean (exact,
+    deterministic, no resampling -- fast).
 
-    return S_A_nsb + S_B_nsb - S_AB_nsb, dict(S_A=S_A_nsb, S_B=S_B_nsb, S_AB=S_AB_nsb)
-
-
-def sba_nsb_with_analytic_uncertainty(n_a, n_b, alphabet_a, alphabet_b):
-    """S(B|A) via NSB, plus an analytic sigma using the independence
-    approximation Var(S_AB - S_A) ~= Var(S_AB) + Var(S_A). See toy-study
-    notebook Section 7 for why this is a conservative (slightly too large)
-    approximation: it drops the (typically positive) covariance between
-    S_A and S_AB that arises because both are estimated from the same
-    event sample."""
-    va, ca = np.unique(n_a, return_counts=True)
-    pairs = np.stack([n_a, n_b], axis=1)
-    _, cab = np.unique(pairs, axis=0, return_counts=True)
-
-    K_joint = alphabet_a * alphabet_b
-    S_A_nsb, Var_A_nsb = nsb_entropy_and_variance(ca, alphabet_a)
-    S_AB_nsb, Var_AB_nsb = nsb_entropy_and_variance(cab, K_joint)
-
-    SBA_nsb = S_AB_nsb - S_A_nsb
-    sigma_analytic = np.sqrt(Var_AB_nsb + Var_A_nsb)
-    return SBA_nsb, sigma_analytic
-
-
-def sba_bootstrap_uncertainty(n_a, n_b, alphabet_a, alphabet_b,
-                                n_boot=200, rng=None):
-    """Real-data uncertainty via bootstrap resampling of the ACTUAL dataset
-    (resample events with replacement). This is the real-data analogue of
-    the toy study's Monte-Carlo-repetition noise floor -- here we don't
-    have a known generative model to redraw fresh independent samples
-    from, so we resample the one dataset we have instead."""
+    Uncertainty: bootstrap (n_boot resamples of the real data, with
+    replacement), computed DIRECTLY on the composite quantities I and
+    S(B|A) each resample -- not by separately bootstrapping/analytically
+    computing Var(S_A), Var(S_B), Var(S_AB) and adding them under an
+    independence approximation. Since S_A, S_B, S_AB are all estimated
+    from the SAME event sample, they're correlated; bootstrapping the
+    composite quantity directly captures that correlation automatically,
+    rather than assuming it away. This tends to give a TIGHTER (less
+    conservative) uncertainty than the independence-approximation analytic
+    formula used in an earlier version of this function -- confirmed
+    empirically to give noticeably smaller error bars on real PYTHIA8
+    output. (The purely analytic posterior-variance route is still
+    available via nsb_entropy_and_variance() if a fast, single-dataset,
+    no-resampling estimate is ever needed again -- just not used here by
+    default.)
+    """
     if rng is None:
         rng = np.random.default_rng()
     n_a = np.asarray(n_a)
     n_b = np.asarray(n_b)
     N = len(n_a)
-    SBA_boot = np.empty(n_boot)
+
+    def point_entropies(na_, nb_):
+        va, ca = np.unique(na_, return_counts=True)
+        vb, cb = np.unique(nb_, return_counts=True)
+        pairs = np.stack([na_, nb_], axis=1)
+        _, cab = np.unique(pairs, axis=0, return_counts=True)
+        K_joint = alphabet_a * alphabet_b
+        S_A_ = nsb_entropy_from_counts(ca, alphabet_a)
+        S_B_ = nsb_entropy_from_counts(cb, alphabet_b)
+        S_AB_ = nsb_entropy_from_counts(cab, K_joint)
+        return S_A_, S_B_, S_AB_
+
+    # ---- point estimates: single-shot, on the real data ----
+    S_A, S_B, S_AB = point_entropies(n_a, n_b)
+    I = S_A + S_B - S_AB
+    SBA = S_AB - S_A
+
+    # ---- uncertainty: bootstrap, computed on the composite quantities ----
+    S_A_boot = np.empty(n_boot)
+    S_B_boot = np.empty(n_boot)
+    S_AB_boot = np.empty(n_boot)
     for i in range(n_boot):
         idx = rng.integers(0, N, size=N)
-        SBA_boot[i], _ = sba_nsb_with_analytic_uncertainty(
-            n_a[idx], n_b[idx], alphabet_a, alphabet_b)
-    return SBA_boot.mean(), SBA_boot.std(ddof=1)
+        S_A_boot[i], S_B_boot[i], S_AB_boot[i] = point_entropies(n_a[idx], n_b[idx])
+
+    I_boot = S_A_boot + S_B_boot - S_AB_boot
+    SBA_boot = S_AB_boot - S_A_boot
+
+    # ---- NMI = I / min(S_A, S_B): scale-comparable version of MI ----
+    # Classically I <= min(S_A,S_B) always (same bound underlying the
+    # S(B|A)>=0 witness), so NMI in [0,1] for any classical system;
+    # NMI>1 is the same classical-bound violation expressed as a ratio.
+    # Point estimate: single-shot on the real data. Uncertainty: bootstrap
+    # of the FULL RATIO each resample (not error-propagated from
+    # separately-bootstrapped Var(I) and Var(min(S_A,S_B)) -- the ratio is
+    # a nonlinear, discontinuous-derivative function of two correlated,
+    # jointly-resampled quantities, so bootstrapping it directly is the
+    # only reliable way to get its uncertainty, exactly the same
+    # reasoning as bootstrapping I and S(B|A) directly rather than
+    # error-propagating from Var(S_A)+Var(S_B)+Var(S_AB)).
+    NMI = I / min(S_A, S_B)
+    NMI_boot = I_boot / np.minimum(S_A_boot, S_B_boot)
+
+    return dict(
+        S_A=S_A, S_A_err=S_A_boot.std(ddof=1),
+        S_B=S_B, S_B_err=S_B_boot.std(ddof=1),
+        S_AB=S_AB, S_AB_err=S_AB_boot.std(ddof=1),
+        I=I, I_err=I_boot.std(ddof=1),
+        SBA=SBA, SBA_err=SBA_boot.std(ddof=1),
+        NMI=NMI, NMI_err=NMI_boot.std(ddof=1),
+    )
 
 
 def bootstrap_all_estimators(n_a, n_b, alphabet_a, alphabet_b,
                                n_boot=50, n_shuffles_inner=30, rng=None):
     """
-    Unified bootstrap: for each of n_boot resamples (with replacement) of
-    the actual dataset, compute ALL of naive/Miller-Madow/shuffle/NSB I(A:B)
-    and naive/Miller-Madow/NSB S(B|A) from the SAME resampled indices, then
-    report (mean, std) for each. This gives every method's point estimate
-    and uncertainty from one consistent procedure, so bars/curves for
-    different methods are directly comparable rather than mixing different
-    uncertainty conventions.
+    Point estimates and uncertainties for naive/Miller-Madow/shuffle
+    I(A:B) and naive/Miller-Madow S(B|A) via bootstrap (point estimates
+    computed ONCE on the real data; bootstrap resampling used only for
+    the standard deviation across resamples). NSB is NOT computed here --
+    NSB always goes through nsb_all() instead, which does its own
+    (separately-seeded) bootstrap uncertainty on the composite I/S(B|A)
+    quantities directly. This guarantees every plot/table showing "NSB"
+    displays the identical number, since there's only one code path that
+    ever computes it. Callers that want NSB alongside these bootstrap
+    results should call nsb_all() separately and merge the two dicts --
+    see pt_differential_analysis() for the pattern.
 
     Note: there is no shuffle-subtraction analogue for S(B|A) -- shuffle-
     subtraction specifically targets the joint-vs-marginal bias mechanism
     behind I(A:B) (see toy-study Section 5); it doesn't have an established,
     validated equivalent for a single conditional entropy. Miller-Madow's
     per-entropy correction, by contrast, applies directly to S_A and S_AB
-    individually and so generalizes to S(B|A) trivially -- that's why the
-    S(B|A) comparison below has three methods, not four.
+    individually and so generalizes to S(B|A) trivially.
 
     n_shuffles_inner is deliberately smaller than a typical standalone
     shuffle-correction call (default 200 elsewhere) since this function
-    already runs shuffle-correction once per bootstrap replicate -- the
-    outer bootstrap loop is what's driving statistical precision here, not
-    the inner shuffle-null precision at any single replicate.
+    runs shuffle-correction once per bootstrap replicate (for the
+    uncertainty) plus once more for the point estimate.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -271,37 +307,55 @@ def bootstrap_all_estimators(n_a, n_b, alphabet_a, alphabet_b,
     n_b = np.asarray(n_b)
     N = len(n_a)
 
-    keys = ['I_naive', 'I_mm', 'I_shuffle', 'I_nsb', 'SBA_naive', 'SBA_mm', 'SBA_nsb']
-    vals = {k: np.empty(n_boot) for k in keys}
+    keys = ['I_naive', 'I_mm', 'I_shuffle', 'SBA_naive', 'SBA_mm', 'NMI_naive', 'NMI_mm']
 
+    # ---- point estimates: computed ONCE, on the real data ----
+    S_A_naive, S_B_naive, S_AB_naive, K_A, K_B, K_AB, N0 = entropies_from_samples(n_a, n_b)
+    point = {}
+    point['I_naive'] = S_A_naive + S_B_naive - S_AB_naive
+    point['SBA_naive'] = S_AB_naive - S_A_naive
+    point['NMI_naive'] = point['I_naive'] / min(S_A_naive, S_B_naive)
+
+    mm_bias = (K_AB - K_A - K_B + 1) / (2.0 * N0)
+    point['I_mm'] = point['I_naive'] - mm_bias
+    S_A_mm = S_A_naive - (K_A - 1) / (2.0 * N0)
+    S_AB_mm = S_AB_naive - (K_AB - 1) / (2.0 * N0)
+    point['SBA_mm'] = S_AB_mm - S_A_mm
+    S_B_mm = S_B_naive - (K_B - 1) / (2.0 * N0)
+    point['NMI_mm'] = point['I_mm'] / min(S_A_mm, S_B_mm)
+
+    point['I_shuffle'], _, _, _ = shuffle_correction_MI(n_a, n_b, n_shuffles=n_shuffles_inner, rng=rng)
+
+    # ---- uncertainty: spread over bootstrap resamples ----
+    vals = {k: np.empty(n_boot) for k in keys}
     for i in range(n_boot):
         idx = rng.integers(0, N, size=N)
         ra, rb = n_a[idx], n_b[idx]
 
-        S_A_naive, S_B_naive, S_AB_naive, K_A, K_B, K_AB, Nr = entropies_from_samples(ra, rb)
-        I_naive = S_A_naive + S_B_naive - S_AB_naive
-        SBA_naive = S_AB_naive - S_A_naive
+        S_A_naive_b, S_B_naive_b, S_AB_naive_b, K_A_b, K_B_b, K_AB_b, Nr = entropies_from_samples(ra, rb)
+        I_naive_b = S_A_naive_b + S_B_naive_b - S_AB_naive_b
+        SBA_naive_b = S_AB_naive_b - S_A_naive_b
+        NMI_naive_b = I_naive_b / min(S_A_naive_b, S_B_naive_b)
 
-        mm_bias = (K_AB - K_A - K_B + 1) / (2.0 * Nr)
-        I_mm = I_naive - mm_bias
-        S_A_mm = S_A_naive - (K_A - 1) / (2.0 * Nr)
-        S_AB_mm = S_AB_naive - (K_AB - 1) / (2.0 * Nr)
-        SBA_mm = S_AB_mm - S_A_mm
+        mm_bias_b = (K_AB_b - K_A_b - K_B_b + 1) / (2.0 * Nr)
+        I_mm_b = I_naive_b - mm_bias_b
+        S_A_mm_b = S_A_naive_b - (K_A_b - 1) / (2.0 * Nr)
+        S_AB_mm_b = S_AB_naive_b - (K_AB_b - 1) / (2.0 * Nr)
+        SBA_mm_b = S_AB_mm_b - S_A_mm_b
+        S_B_mm_b = S_B_naive_b - (K_B_b - 1) / (2.0 * Nr)
+        NMI_mm_b = I_mm_b / min(S_A_mm_b, S_B_mm_b)
 
-        I_shuffle, _, _, _ = shuffle_correction_MI(ra, rb, n_shuffles=n_shuffles_inner, rng=rng)
+        I_shuffle_b, _, _, _ = shuffle_correction_MI(ra, rb, n_shuffles=n_shuffles_inner, rng=rng)
 
-        I_nsb, nsb_info = nsb_MI(ra, rb, alphabet_a, alphabet_b)
-        SBA_nsb = nsb_info['S_AB'] - nsb_info['S_A']
+        vals['I_naive'][i] = I_naive_b
+        vals['I_mm'][i] = I_mm_b
+        vals['I_shuffle'][i] = I_shuffle_b
+        vals['SBA_naive'][i] = SBA_naive_b
+        vals['SBA_mm'][i] = SBA_mm_b
+        vals['NMI_naive'][i] = NMI_naive_b
+        vals['NMI_mm'][i] = NMI_mm_b
 
-        vals['I_naive'][i] = I_naive
-        vals['I_mm'][i] = I_mm
-        vals['I_shuffle'][i] = I_shuffle
-        vals['I_nsb'][i] = I_nsb
-        vals['SBA_naive'][i] = SBA_naive
-        vals['SBA_mm'][i] = SBA_mm
-        vals['SBA_nsb'][i] = SBA_nsb
-
-    return {k: (vals[k].mean(), vals[k].std(ddof=1)) for k in keys}
+    return {k: (point[k], vals[k].std(ddof=1)) for k in keys}
 
 
 # =============================================================================
@@ -501,6 +555,112 @@ def plot_multiplicity_distributions(n_a, n_b, out_prefix):
     print(f"  saved {out_prefix}_multiplicity_dists.png")
 
 
+def fit_multiplicity_vs_logpt(centers, means, sems):
+    """
+    Weighted least-squares fit of mean multiplicity vs ln(pT) -- the
+    functional form motivated by MLLA coherent-branching arguments
+    (roughly logarithmic growth of multiplicity with jet energy/pT),
+    which is exactly why a modest-dynamic-range window can show only a
+    small absolute rise even when the underlying correlation is real and
+    the same slope as seen clearly over a wide range (e.g. LHC energies).
+
+    Returns (slope, slope_err, significance_sigma).
+    """
+    centers = np.asarray(centers); means = np.asarray(means); sems = np.asarray(sems)
+    x = np.log(centers)
+    w = 1.0 / sems**2
+    # weighted linear regression: y = a + b*x
+    W = w.sum()
+    Wx = (w * x).sum()
+    Wy = (w * means).sum()
+    Wxx = (w * x * x).sum()
+    Wxy = (w * x * means).sum()
+    denom = W * Wxx - Wx**2
+    b = (W * Wxy - Wx * Wy) / denom       # slope: particles per unit ln(pT)
+    a = (Wxx * Wy - Wx * Wxy) / denom
+    b_err = np.sqrt(W / denom)
+    sig = b / b_err if b_err > 0 else np.nan
+    return a, b, b_err, sig
+
+
+def plot_multiplicity_vs_pt_profile(jet1_pt, jet2_pt, n_a, n_b, out_prefix, n_bins=15):
+    """
+    DIAGNOSTIC: raw, unbinned-by-entropy-machinery profile of mean charged
+    multiplicity vs. jet pT, computed directly from the tree with nothing
+    more sophisticated than per-bin mean +/- standard error of the mean.
+    This bypasses NSB/quantile-binning/entropy entirely -- it exists to
+    answer one question directly: does the ROOT tree actually contain a
+    real per-event correlation between a jet's pT and its own charged
+    multiplicity? If this plot is flat, that points to the generator/tree
+    (or the underlying physics over the achieved pT range); if this plot
+    rises but the entropy-vs-pT plots look flat, that points to the
+    pT-binning (e.g. quantile bins compressed into too narrow a range).
+
+    Also fits mean multiplicity vs ln(pT) (the MLLA-motivated functional
+    form -- roughly logarithmic growth, not linear) and reports the
+    slope's significance in sigma. This turns "does this look flat" from
+    a visual judgment call into an actual quantitative test: over a
+    narrow pT window (e.g. RHIC energies) a real, physically-expected
+    correlation can produce only a small absolute rise that's easy to
+    dismiss by eye but can still be statistically significant with
+    enough events.
+    """
+    jet1_pt = np.asarray(jet1_pt); jet2_pt = np.asarray(jet2_pt)
+    n_a = np.asarray(n_a); n_b = np.asarray(n_b)
+
+    r_A = np.corrcoef(jet1_pt, n_a)[0, 1]
+    r_B = np.corrcoef(jet2_pt, n_b)[0, 1]
+    print(f"  Raw Pearson correlation, jet1_pt vs N_A: {r_A:.4f}")
+    print(f"  Raw Pearson correlation, jet2_pt vs N_B: {r_B:.4f}")
+    if abs(r_A) < 0.05:
+        print("  NOTE: |corr| < 0.05 -- essentially no linear relationship between "
+              "jet 1 pT and its own multiplicity in this dataset. If you physically "
+              "expect one, this points to the generator/tree, not the pT-binning "
+              "downstream.")
+
+    fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
+
+    for ax, pt, mult, label, color in [
+        (axes[0], jet1_pt, n_a, f'jet 1: N_A vs pT (r={r_A:.3f})', '#1f77b4'),
+        (axes[1], jet2_pt, n_b, f'jet 2: N_B vs pT (r={r_B:.3f})', '#d62728'),
+    ]:
+        edges = np.linspace(pt.min(), pt.max(), n_bins + 1)
+        centers, means, sems = [], [], []
+        for i in range(n_bins):
+            lo, hi = edges[i], edges[i+1]
+            mask = (pt >= lo) & (pt < hi) if i < n_bins-1 else (pt >= lo) & (pt <= hi)
+            if mask.sum() < 2:
+                continue
+            centers.append(pt[mask].mean())
+            means.append(mult[mask].mean())
+            sems.append(mult[mask].std(ddof=1) / np.sqrt(mask.sum()))
+        ax.errorbar(centers, means, yerr=sems, fmt='o-', color=color, capsize=3,
+                    label='data (binned mean ± SEM)')
+
+        a, b, b_err, sig = fit_multiplicity_vs_logpt(centers, means, sems)
+        pt_fit = np.linspace(min(centers), max(centers), 100)
+        ax.plot(pt_fit, a + b * np.log(pt_fit), '--', color='black',
+                label=f'fit: dN/d(ln pT) = {b:.3f} ± {b_err:.3f}  ({sig:.1f}σ)')
+        jet_label = 'jet 1' if 'jet 1' in label else 'jet 2'
+        print(f"  [{jet_label}] fit dN/d(ln pT) = {b:.4f} +/- {b_err:.4f} nats  "
+              f"({sig:.2f} sigma from zero)")
+        if abs(sig) > 3:
+            print(f"    -> slope IS statistically significant (>3 sigma), even if "
+                  f"the absolute rise looks small over this pT range.")
+        elif abs(sig) < 1:
+            print(f"    -> slope is NOT statistically significant -- consistent with "
+                  f"a genuinely flat relationship in this dataset.")
+
+        ax.set_xlabel(r'jet $p_T$ (GeV)')
+        ax.set_ylabel('mean charged multiplicity')
+        ax.set_title(label)
+        ax.legend(fontsize=8)
+
+    plt.tight_layout()
+    plt.savefig(f"{out_prefix}_mult_vs_pt_profile.png", dpi=150)
+    print(f"  saved {out_prefix}_mult_vs_pt_profile.png")
+
+
 def plot_pt_distributions(jet1_pt, jet2_pt, out_prefix, n_bins=40):
     """i) Jet pT distributions (leading and subleading), with Poisson
     counting error bars per bin -- the pT-space analogue of the
@@ -592,15 +752,16 @@ def pt_differential_analysis(n_a, n_b, jet_pt, alphabet_a, alphabet_b,
                                n_shuffles_inner=30, rng=None):
     """
     Bin events by leading-jet pT and compute, in each bin:
-    S_A, S_B, S_AB (NSB mean + analytic variance), I(A:B), S(B|A),
-    each with propagated uncertainty (independence approximation, as
-    validated/caveated in the toy study).
+    S_A, S_B, S_AB, I(A:B), S(B|A) via nsb_all() -- the single canonical
+    NSB computation used everywhere in this script, bootstrap uncertainty
+    throughout (n_boot_compare resamples; see nsb_all()'s docstring).
 
-    If compare_methods=True, ALSO compute naive/Miller-Madow/shuffle/NSB
-    I(A:B) and naive/Miller-Madow/NSB S(B|A) per bin via
-    bootstrap_all_estimators, for the multi-method comparison plots.
-    This roughly (n_bins x n_boot_compare) times more expensive than the
-    NSB-only pass above, so it's opt-in.
+    If compare_methods=True, ALSO compute naive/Miller-Madow/shuffle
+    I(A:B) and naive/Miller-Madow S(B|A) per bin via bootstrap_all_estimators,
+    for the multi-method comparison plots. The NSB entries in that
+    comparison (I_nsb, SBA_nsb + errors) are simply copied from the
+    nsb_all() result already computed above -- guaranteeing the
+    comparison plot's NSB curve is identical to the dedicated NSB plots.
     """
     if rng is None:
         rng = np.random.default_rng()
@@ -624,30 +785,11 @@ def pt_differential_analysis(n_a, n_b, jet_pt, alphabet_a, alphabet_b,
 
         na_bin, nb_bin = n_a[mask], n_b[mask]
 
-        va, ca = np.unique(na_bin, return_counts=True)
-        vb, cb = np.unique(nb_bin, return_counts=True)
-        pairs = np.stack([na_bin, nb_bin], axis=1)
-        _, cab = np.unique(pairs, axis=0, return_counts=True)
-
-        K_joint = alphabet_a * alphabet_b
-        S_A, Var_A = nsb_entropy_and_variance(ca, alphabet_a)
-        S_B, Var_B = nsb_entropy_and_variance(cb, alphabet_b)
-        S_AB, Var_AB = nsb_entropy_and_variance(cab, K_joint)
-
-        I_val = S_A + S_B - S_AB
-        # independence approximation (conservative; see toy-study caveats)
-        I_var = Var_A + Var_B + Var_AB
-
-        SBA_val = S_AB - S_A
-        SBA_var = Var_AB + Var_A
+        nsb_res = nsb_all(na_bin, nb_bin, alphabet_a, alphabet_b, n_boot=n_boot_compare, rng=rng)
 
         bin_result = dict(
             pt_lo=lo, pt_hi=hi, pt_mid=jet_pt[mask].mean(), N=n_bin,
-            S_A=S_A, S_A_err=np.sqrt(Var_A),
-            S_B=S_B, S_B_err=np.sqrt(Var_B),
-            S_AB=S_AB, S_AB_err=np.sqrt(Var_AB),
-            I=I_val, I_err=np.sqrt(I_var),
-            SBA=SBA_val, SBA_err=np.sqrt(SBA_var),
+            **nsb_res,
         )
 
         if compare_methods:
@@ -657,6 +799,15 @@ def pt_differential_analysis(n_a, n_b, jet_pt, alphabet_a, alphabet_b,
             for k, (mean, std) in boot.items():
                 bin_result[k] = mean
                 bin_result[k + '_err'] = std
+            # NSB: copied from the nsb_all() result above, never recomputed
+            # via bootstrap -- this is what guarantees the comparison
+            # plot's NSB curve matches the dedicated NSB plots exactly.
+            bin_result['I_nsb'] = nsb_res['I']
+            bin_result['I_nsb_err'] = nsb_res['I_err']
+            bin_result['SBA_nsb'] = nsb_res['SBA']
+            bin_result['SBA_nsb_err'] = nsb_res['SBA_err']
+            bin_result['NMI_nsb'] = nsb_res['NMI']
+            bin_result['NMI_nsb_err'] = nsb_res['NMI_err']
 
         results.append(bin_result)
 
@@ -722,6 +873,39 @@ def plot_method_comparison_vs_pt(results, out_prefix):
     print(f"  saved {out_prefix}_method_comparison_vs_pt.png")
 
 
+def plot_method_comparison_NMI_vs_pt(results, out_prefix):
+    """NEW: compare naive / Miller-Madow / NSB estimators of
+    NMI = I/min(S_A,S_B) vs. leading-jet pT (no shuffle -- shuffle-
+    correction doesn't correct S_A/S_B individually, same reason it's
+    absent from the S(B|A) comparison). Separate new plot file; does not
+    modify plot_method_comparison_vs_pt above."""
+    pt = np.array([r['pt_mid'] for r in results])
+    offsets = np.linspace(-0.45, 0.45, 3)
+
+    fig, ax = plt.subplots(figsize=(7.5, 5.2))
+    for off, key, label, color, marker in zip(
+        offsets,
+        ['NMI_naive', 'NMI_mm', 'NMI_nsb'],
+        ['naive', 'Miller-Madow', 'NSB'],
+        ['#d62728', '#ff7f0e', '#9467bd'],
+        ['o', 's', 'D'],
+    ):
+        vals = np.array([r[key] for r in results])
+        errs = np.array([r[key + '_err'] for r in results])
+        ax.errorbar(pt + off, vals, yerr=errs, fmt=marker, color=color,
+                    capsize=3, markersize=6, label=label)
+    ax.axhline(0, color='gray', lw=0.8)
+    ax.axhline(1, color='red', ls=':', label='classical bound (NMI=1)')
+    ax.set_xlabel(r'leading jet $p_T$ (GeV)')
+    ax.set_ylabel(r'$\mathrm{NMI} = I(A:B)/\min(S_A,S_B)$')
+    ax.set_title('Method comparison: NMI vs. $p_T$ (bootstrap error bars)')
+    ax.legend(fontsize=9)
+
+    plt.tight_layout()
+    plt.savefig(f"{out_prefix}_method_comparison_NMI_vs_pt.png", dpi=150)
+    print(f"  saved {out_prefix}_method_comparison_NMI_vs_pt.png")
+
+
 def plot_entropy_vs_pt(results, out_prefix):
     """ii) S_A, S_B, S_AB vs. leading jet pT."""
     pt = [r['pt_mid'] for r in results]
@@ -774,6 +958,28 @@ def plot_SBA_vs_pt(results, out_prefix):
     print(f"  saved {out_prefix}_SBA_vs_pt.png")
 
 
+def plot_NMI_vs_pt(results, out_prefix):
+    """NEW: NMI = I/min(S_A,S_B) vs. leading jet pT -- scale-comparable
+    version of MI (see chat notes). Classically bounded in [0,1]; NMI>1
+    is the same classical-bound violation as S(B|A)<0, expressed as a
+    ratio instead of a difference. New plot file, does not modify
+    plot_MI_vs_pt/plot_SBA_vs_pt above."""
+    pt = [r['pt_mid'] for r in results]
+    NMI_vals = [r['NMI'] for r in results]
+    NMI_errs = [r['NMI_err'] for r in results]
+    fig, ax = plt.subplots(figsize=(7.5, 5))
+    ax.errorbar(pt, NMI_vals, yerr=NMI_errs, fmt='o-', capsize=3, color='#2ca02c')
+    ax.axhline(0, color='gray', lw=0.8)
+    ax.axhline(1, color='red', ls=':', label='classical bound (NMI=1)')
+    ax.set_xlabel(r'leading jet $p_T$ (GeV)')
+    ax.set_ylabel(r'$\mathrm{NMI} = I(A:B)/\min(S_A,S_B)$, NSB')
+    ax.set_title(r'Normalized mutual information vs. leading-jet $p_T$')
+    ax.legend()
+    plt.tight_layout()
+    plt.savefig(f"{out_prefix}_NMI_vs_pt.png", dpi=150)
+    print(f"  saved {out_prefix}_NMI_vs_pt.png")
+
+
 def print_pt_bin_table(results):
     print(f"\n{'pT range':>16} | {'N':>6} | {'S_A':>14} | {'S_B':>14} | "
           f"{'S_AB':>14} | {'I(A:B)':>14} | {'S(B|A)':>14}")
@@ -808,8 +1014,6 @@ def main():
                               "generous for R=0.4 charged jets at these kinematics; "
                               "consider a smaller value for --level det, since "
                               "acceptance+efficiency lowers observed multiplicities)")
-    parser.add_argument("--n-boot", type=int, default=200,
-                         help="bootstrap resamples for the real-data NSB noise floor")
     parser.add_argument("--n-boot-compare", type=int, default=50,
                          help="bootstrap resamples PER pT BIN PER METHOD for the "
                               "multi-method comparison plots (iii) and the summary "
@@ -841,13 +1045,18 @@ def main():
                               "green light)")
     parser.add_argument("--skip-pt-differential", action="store_true",
                          help="skip the pT-binned analysis (e.g. for very small samples)")
+    parser.add_argument("--figs-dir", default="figs",
+                         help="directory to save figures in (relative to current working "
+                              "directory by default; pass an absolute path if running "
+                              "from elsewhere, e.g. $HOME)")
     args = parser.parse_args()
 
     if args.out_prefix is None:
         args.out_prefix = f"dijet_entropy_result_{args.level}"
 
-    os.makedirs("figs", exist_ok=True)
-    args.out_prefix = os.path.join("figs", args.out_prefix)
+    os.makedirs(args.figs_dir, exist_ok=True)
+    args.out_prefix = os.path.join(args.figs_dir, args.out_prefix)
+    print(f"Figures will be saved under: {args.figs_dir}")
 
     rng = np.random.default_rng(12345)
 
@@ -875,32 +1084,37 @@ def main():
     I_naive, info = naive_MI(n_a, n_b)
     I_mm, _, mm_bias = miller_madow_MI(n_a, n_b)
     I_sh, _, sh_bias, sh_err = shuffle_correction_MI(n_a, n_b, n_shuffles=200, rng=rng)
-    I_nsb, nsb_info = nsb_MI(n_a, n_b, ALPHABET_A, ALPHABET_B)
+    nsb_res = nsb_all(n_a, n_b, ALPHABET_A, ALPHABET_B, n_boot=args.n_boot_compare, rng=rng)
+    I_nsb, I_nsb_err = nsb_res['I'], nsb_res['I_err']
 
     print(f"  K_A={info['K_A']}  K_B={info['K_B']}  K_AB={info['K_AB']}  N={info['N']}")
     print(f"  naive          : {I_naive:.4f} nats")
     print(f"  Miller-Madow   : {I_mm:.4f} nats  (bias correction: {mm_bias:.4f})")
     print(f"  shuffle-corr.  : {I_sh:.4f} nats  (bias estimate: {sh_bias:.4f} +/- {sh_err:.4f})")
-    print(f"  NSB            : {I_nsb:.4f} nats   <-- recommended")
+    print(f"  NSB            : {I_nsb:.4f} +/- {I_nsb_err:.4f} nats   <-- recommended")
+
+    # ---- NMI = I / min(S_A, S_B): scale-comparable normalized MI ----
+    print(f"\n--- NMI = I(A:B) / min(S_A,S_B) (scale-comparable; classical bound: NMI<=1) ---")
+    print(f"  NSB            : {nsb_res['NMI']:.4f} +/- {nsb_res['NMI_err']:.4f}   "
+          f"(S_A={nsb_res['S_A']:.4f}, S_B={nsb_res['S_B']:.4f}, min={min(nsb_res['S_A'],nsb_res['S_B']):.4f})")
 
     # ---- conditional entropy S(B|A): the quantum witness ----
+    # Single canonical NSB computation (nsb_all, called above) supplies
+    # S(B|A) and its bootstrap uncertainty directly. This is the ONLY
+    # place S(B|A)'s uncertainty is computed, so it's guaranteed to match
+    # whatever any other plot/table reports.
     print("\n--- Conditional entropy S(B|A) = S_AB - S_A (quantum witness) ---")
-    SBA_nsb, sigma_analytic = sba_nsb_with_analytic_uncertainty(
-        n_a, n_b, ALPHABET_A, ALPHABET_B)
-    SBA_boot_mean, sigma_boot = sba_bootstrap_uncertainty(
-        n_a, n_b, ALPHABET_A, ALPHABET_B, n_boot=args.n_boot, rng=rng)
+    SBA_nsb, sigma_boot = nsb_res['SBA'], nsb_res['SBA_err']
 
-    print(f"  S(B|A)_NSB              = {SBA_nsb:.4f} nats")
-    print(f"  sigma (analytic, single dataset) = {sigma_analytic:.4f} nats")
-    print(f"  sigma (bootstrap, {args.n_boot} resamples)  = {sigma_boot:.4f} nats")
+    print(f"  S(B|A)_NSB                       = {SBA_nsb:.4f} nats")
+    print(f"  sigma (bootstrap, {args.n_boot_compare} resamples)   = {sigma_boot:.4f} nats")
 
     z_score = SBA_nsb / sigma_boot if sigma_boot > 0 else np.nan
-    print(f"\n  S(B|A) is {z_score:.2f} sigma from zero (bootstrap sigma).")
+    print(f"\n  S(B|A) is {z_score:.2f} sigma from zero.")
     if SBA_nsb < 0:
         print(f"  NEGATIVE conditional entropy -- classically impossible; "
-              f"significance = {abs(z_score):.2f} sigma. Check both the "
-              f"analytic and bootstrap sigma agree before trusting this, "
-              f"and check S(A|B) as well.")
+              f"significance = {abs(z_score):.2f} sigma. Check S(A|B) as well "
+              f"before drawing conclusions.")
     else:
         print("  Positive, consistent with a classical description at "
               "this precision. (Consistent with a classical description "
@@ -908,10 +1122,9 @@ def main():
               "toy-study notebook's caveats.)")
 
     # Also compute S(A|B) for completeness (conditional entropy is not symmetric).
-    SAB_nsb_other, sigma_analytic_other = sba_nsb_with_analytic_uncertainty(
-        n_b, n_a, ALPHABET_B, ALPHABET_A)
-    print(f"\n  S(A|B)_NSB = {SAB_nsb_other:.4f} nats "
-          f"(analytic sigma = {sigma_analytic_other:.4f})")
+    nsb_res_other = nsb_all(n_b, n_a, ALPHABET_B, ALPHABET_A, n_boot=args.n_boot_compare, rng=rng)
+    print(f"\n  S(A|B)_NSB = {nsb_res_other['SBA']:.4f} nats "
+          f"(bootstrap sigma = {nsb_res_other['SBA_err']:.4f})")
 
     # ---- bias-vs-subsample-size diagnostic on the real data ----
     print("\n--- Bias-vs-statistics diagnostic (subsampling the real dataset) ---")
@@ -934,9 +1147,11 @@ def main():
     print(f"  saved {args.out_prefix}_bias_scan.png")
 
     # ---- summary plot: all four MI estimates + S(B|A) with uncertainty ----
-    # (ii) error bars added here via the unified whole-sample bootstrap --
-    # previously this bar chart had no uncertainty at all.
-    print("\n--- Bootstrapping all estimators on the full sample (for error bars) ---")
+    # naive/Miller-Madow/shuffle error bars: bootstrap (no analytic formula
+    # exists for these). NSB error bar: analytic (nsb_res, computed above)
+    # -- naive/Miller-Madow/shuffle bootstrapped here; NSB already
+    # bootstrapped above via nsb_all (separate call, same n_boot_compare).
+    print("\n--- Bootstrapping naive/Miller-Madow/shuffle on the full sample (for error bars) ---")
     full_boot = bootstrap_all_estimators(n_a, n_b, ALPHABET_A, ALPHABET_B,
                                           n_boot=args.n_boot_compare,
                                           n_shuffles_inner=args.n_shuffles_inner, rng=rng)
@@ -947,12 +1162,11 @@ def main():
     methods = ['naive', 'Miller-Madow', 'shuffle', 'NSB']
     values = [I_naive, I_mm, I_sh, I_nsb]
     errors = [full_boot['I_naive'][1], full_boot['I_mm'][1],
-              full_boot['I_shuffle'][1], full_boot['I_nsb'][1]]
+              full_boot['I_shuffle'][1], I_nsb_err]
     colors = ['#d62728', '#ff7f0e', '#1f77b4', '#9467bd']
     ax.bar(methods, values, yerr=errors, capsize=5, color=colors)
     ax.set_ylabel('I(A:B) (nats)')
-    ax.set_title('MI estimators, this dataset\n(error bars: bootstrap, N_boot='
-                  f'{args.n_boot_compare})')
+    ax.set_title(f'MI estimators, this dataset\n(all error bars: bootstrap, N_boot={args.n_boot_compare})')
     ax.tick_params(axis='x', rotation=20)
 
     ax = axes[1]
@@ -978,6 +1192,15 @@ def main():
     print("\n--- i) Jet pT distributions ---")
     plot_pt_distributions(jet1_pt, jet2_pt, args.out_prefix)
     plot_joint_pt_distribution(jet1_pt, jet2_pt, args.out_prefix)
+
+    # ---- DIAGNOSTIC: raw multiplicity-vs-pT correlation, bypassing all
+    # entropy/NSB/binning machinery. Look at this BEFORE trusting anything
+    # downstream that bins by pT -- if this is flat, the issue is upstream
+    # (generator/tree); if this rises but the entropy-vs-pT plots look
+    # flat, the issue is in the pT-binning (e.g. quantile bins compressed
+    # into too narrow a range on a steeply-falling spectrum).
+    print("\n--- DIAGNOSTIC: raw multiplicity vs. pT profile (bypasses NSB/binning) ---")
+    plot_multiplicity_vs_pt_profile(jet1_pt, jet2_pt, n_a, n_b, args.out_prefix)
 
     # ---- ii)-iv) differential vs. leading-jet pT ----
     if args.skip_pt_differential:
@@ -1006,8 +1229,10 @@ def main():
             plot_entropy_vs_pt(pt_results, args.out_prefix)
             plot_MI_vs_pt(pt_results, args.out_prefix)
             plot_SBA_vs_pt(pt_results, args.out_prefix)
+            plot_NMI_vs_pt(pt_results, args.out_prefix)
             if compare:
                 plot_method_comparison_vs_pt(pt_results, args.out_prefix)
+                plot_method_comparison_NMI_vs_pt(pt_results, args.out_prefix)
 
     print("\nDone.")
 
