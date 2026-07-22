@@ -31,6 +31,12 @@ uncertainty calibration (closure tests) are essential before any claim.
 │                        (calibrated pseudo-truth, NSB pull distributions)
 │                      - closure_test_pt.{py,C}: pT-differential closure
 │                        test (bin-specific model fits)
+│                      - analyze_dijet_mixed.{py,C}: mixed-event
+│                        subtraction of trivial kinematic MI (pT-matched
+│                        partner events; isolates beyond-kinematics MI)
+│                      - closure_test_mixed.{py,C}: closure test for the
+│                        mixed-event method (null + injected-signal
+│                        scenarios, calibrated to real data's kinematics)
 │                      - run_analysis.sh: interactive menu / quick-mode
 │                        wrapper so you don't have to remember arguments
 ├── python_notebook/   Toy Monte Carlo study (known ground truth):
@@ -45,10 +51,13 @@ uncertainty calibration (closure tests) are essential before any claim.
 
 ```bash
 cd analysis
-./run_analysis.sh                          # interactive menu (6 options)
+./run_analysis.sh                          # interactive menu (10 options)
 ./run_analysis.sh 2 myfile.root            # quick mode: option 2, all defaults
 ./run_analysis.sh 2 myfile.root -y         # same, no confirmation prompt
 ```
+Menu options: 1/2 main analysis (py/ROOT), 3/4 whole-sample closure test
+(py/ROOT), 5/6 pT-differential closure test (py/ROOT), 7/8 mixed-event
+subtraction (py/ROOT), 9/10 closure test for the mixed-event method (py/ROOT).
 
 Python scripts need: `pip install uproot numpy scipy matplotlib`
 
