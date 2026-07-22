@@ -895,7 +895,11 @@ void plotMethodComparisonVsPt(const std::vector<double>& ptMid,
     leg1->AddEntry(gS, "shuffle", "lep");
     leg1->AddEntry(gB, "NSB", "lep");
     leg1->Draw();
-    TLine* zeroLine1 = new TLine(ptMid.front()-span, 0, ptMid.back()+span, 0);
+    // Use the ACTUAL rendered x-axis range (queried after Draw), not a
+    // manually-estimated span -- guarantees the line spans exactly
+    // edge-to-edge with no overshoot or gap, regardless of how
+    // TMultiGraph auto-computed its x-range.
+    TLine* zeroLine1 = new TLine(gPad->GetUxmin(), 0, gPad->GetUxmax(), 0);
     zeroLine1->SetLineColor(kGray+1);
     zeroLine1->Draw();
     c1->SaveAs(outPrefix + "_method_comparison_MI_vs_pt.png");
@@ -933,7 +937,7 @@ void plotMethodComparisonVsPt(const std::vector<double>& ptMid,
     leg2->AddEntry(gM2, "Miller-Madow", "lep");
     leg2->AddEntry(gB2, "NSB", "lep");
     leg2->Draw();
-    TLine* zeroLine2 = new TLine(ptMid.front()-span, 0, ptMid.back()+span, 0);
+    TLine* zeroLine2 = new TLine(gPad->GetUxmin(), 0, gPad->GetUxmax(), 0);
     zeroLine2->SetLineColor(kRed);
     zeroLine2->SetLineStyle(3);
     zeroLine2->Draw();
@@ -990,7 +994,7 @@ void plotMethodComparisonNMIVsPt(const std::vector<double>& ptMid,
     leg->AddEntry(gM, "Miller-Madow", "lep");
     leg->AddEntry(gB, "NSB", "lep");
     leg->Draw();
-    TLine* oneLine = new TLine(ptMid.front()-span, 1, ptMid.back()+span, 1);
+    TLine* oneLine = new TLine(gPad->GetUxmin(), 1, gPad->GetUxmax(), 1);
     oneLine->SetLineColor(kRed);
     oneLine->SetLineStyle(3);
     oneLine->Draw();
@@ -1091,12 +1095,20 @@ void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& 
             yMin = std::min({yMin, S_A[i]-S_A_e[i], S_B[i]-S_B_e[i], S_AB[i]-S_AB_e[i]});
         }
         double range = yMax - yMin;
-        mg->SetMaximum(yMax + 0.30*range);
+        // Modest headroom only -- S_AB sits well above S_A/S_B across the
+        // whole pT range, leaving a large natural gap between them, so
+        // the legend goes there instead of needing extra top margin
+        // (previously 30%, which left roughly half the plot empty above
+        // the data for no real reason).
+        mg->SetMaximum(yMax + 0.08*range);
         mg->SetMinimum(yMin - 0.05*range);
     }
 
     mg->Draw("APL");
-    TLegend* leg1 = new TLegend(0.65, 0.7, 0.88, 0.88);
+    // Positioned in the empty band between the S_AB curve (high) and the
+    // S_A/S_B curves (low), rather than above everything -- avoids
+    // wasting vertical range on headroom purely for legend space.
+    TLegend* leg1 = new TLegend(0.38, 0.42, 0.65, 0.58);
     leg1->AddEntry(gA, "S_{A} (leading)", "lep");
     leg1->AddEntry(gB, "S_{B} (subleading)", "lep");
     leg1->AddEntry(gAB, "S_{AB} (joint)", "lep");
@@ -1110,6 +1122,9 @@ void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& 
     gI->SetLineColor(kViolet+1); gI->SetMarkerColor(kViolet+1); gI->SetMarkerStyle(20);
     gI->SetTitle("Mutual information vs. leading-jet p_{T};leading jet p_{T} (GeV);I(A:B) (nats), NSB");
     gI->Draw("APL");
+    TLine* zeroLineMI = new TLine(gPad->GetUxmin(), 0, gPad->GetUxmax(), 0);
+    zeroLineMI->SetLineColor(kGray+1);
+    zeroLineMI->Draw();
     c2->SaveAs(outPrefix + "_MI_vs_pt.png");
     std::cout << "  saved " << outPrefix << "_MI_vs_pt.png\n";
 
@@ -1119,7 +1134,7 @@ void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& 
     gSBA->SetLineColor(kMagenta+2); gSBA->SetMarkerColor(kMagenta+2); gSBA->SetMarkerStyle(20);
     gSBA->SetTitle("Conditional entropy vs. leading-jet p_{T};leading jet p_{T} (GeV);S(B|A) (nats), NSB");
     gSBA->Draw("APL");
-    TLine* zeroLine = new TLine(ptMid.front(), 0, ptMid.back(), 0);
+    TLine* zeroLine = new TLine(gPad->GetUxmin(), 0, gPad->GetUxmax(), 0);
     zeroLine->SetLineColor(kRed);
     zeroLine->SetLineStyle(3);
     zeroLine->Draw();
@@ -1132,16 +1147,14 @@ void ptDifferentialAnalysis(const std::vector<int>& nA, const std::vector<int>& 
     gNMI->SetLineColor(kGreen+2); gNMI->SetMarkerColor(kGreen+2); gNMI->SetMarkerStyle(20);
     gNMI->SetTitle("Normalized mutual information vs. leading-jet p_{T};leading jet p_{T} (GeV);I(A:B)/min(S_{A},S_{B}), NSB");
     gNMI->Draw("APL");
-    TLine* zeroLineNMI = new TLine(ptMid.front(), 0, ptMid.back(), 0);
+    TLine* zeroLineNMI = new TLine(gPad->GetUxmin(), 0, gPad->GetUxmax(), 0);
     zeroLineNMI->SetLineColor(kGray+1);
     zeroLineNMI->Draw();
-    TLine* oneLineNMI = new TLine(ptMid.front(), 1, ptMid.back(), 1);
-    oneLineNMI->SetLineColor(kRed);
-    oneLineNMI->SetLineStyle(3);
-    oneLineNMI->Draw();
-    TLegend* legNMI = new TLegend(0.65, 0.15, 0.88, 0.28);
-    legNMI->AddEntry(oneLineNMI, "classical bound (NMI=1)", "l");
-    legNMI->Draw();
+    // No legend here -- consistent with the standalone MI_vs_pt/SBA_vs_pt
+    // plots above, which likewise don't label their reference line. The
+    // classical bound (NMI=1) line itself is only drawn/labeled in the
+    // multi-method comparison plot, where a legend already exists for
+    // the data series and the bound fits naturally alongside it.
     c4->SaveAs(outPrefix + "_NMI_vs_pt.png");
     std::cout << "  saved " << outPrefix << "_NMI_vs_pt.png\n";
 
