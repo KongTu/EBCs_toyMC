@@ -463,7 +463,7 @@ void analyze_dijet_mixed(const char* rootFile, const char* levelIn = "truth",
             }
             mg->SetTitle("Beyond-kinematics MI vs. p_{T} (mixed-event subtracted);leading jet p_{T} (GeV);I_{same} - I_{mix} (nats)");
             mg->Draw("A");
-            TLegend* leg = new TLegend(0.65, 0.68, 0.90, 0.88);
+            TLegend* leg = new TLegend(0.23, 0.68, 0.48, 0.88);
             for (int k = 0; k < 4; ++k) leg->AddEntry(graphs[k], lab[k], "lep");
             leg->Draw();
             TLine* z2 = new TLine(gPad->GetUxmin(), 0, gPad->GetUxmax(), 0);

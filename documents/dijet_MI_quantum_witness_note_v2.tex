@@ -10,8 +10,6 @@
 \usepackage{caption}
 \usepackage{authblk}
 
-\newcommand{\SBA}{S(B|A)}
-\newcommand{\NMI}{\mathrm{NMI}}
 \newcommand{\Strue}{S_{\rm true}}
 \newcommand{\Itrue}{I_{\rm true}}
 
@@ -30,48 +28,49 @@ A Finite-Statistics Methodology Note}
 \begin{abstract}
 \noindent
 We develop and validate a complete methodological pipeline for measuring
-mutual information (MI), conditional entropy $\SBA$, and a normalized
-witness $\NMI=I(A{:}B)/\min(S_A,S_B)$ between back-to-back jet hadron
-multiplicities, testing whether an observed dijet correlation is
-classically explicable or could signal genuine quantum entanglement. The
-naive plug-in entropy estimator is biased upward at finite sample size,
-in exactly the direction that could mimic a quantum excess; using a
+mutual information (MI) between back-to-back jet hadron multiplicities.
+The naive plug-in entropy estimator is biased upward at finite sample
+size, in exactly the direction that could mimic a real excess; using a
 Monte Carlo toy model with known ground truth, we validate two standard
 corrections (Miller--Madow, shuffle-subtraction) and a Bayesian
-estimator (NSB), and derive a quantitative detection-sensitivity curve
-from the best-behaved of these. The full pipeline, cross-validated
-between independent Python and ROOT/C++ implementations, is applied to
-realistic PYTHIA~8 dijet Monte Carlo. Since PYTHIA output carries no
-independently known true MI, we develop a closure test that calibrates
-a synthetic model to the data's own statistics; applied to a full
-validation sample this finds NSB's bootstrap uncertainty under-covers
-by roughly $1.5$--$1.7\times$, improving substantially when the same
-test is run separately within $p_T$ bins. We further identify and
-correct a distinct systematic: any finite $p_T$ window induces real but
-kinematically trivial MI, since both jets' multiplicities and their
-$p_T$'s are correlated through momentum balance. A mixed-event
-subtraction -- pairing each jet with a $p_T$-matched partner from a
-different event -- isolates the beyond-kinematics MI; closure tests,
-both on synthetic data and at full statistics on the real sample's own
-fitted kinematics, show the naive estimator's finite-sample bias nearly
-cancels between the same-event and mixed-event terms, so the raw
-difference is close to unbiased even before rigorous correction.
-Applied to the real validation sample, the subtraction finds a nonzero
-beyond-kinematics component of order $0.003$~nats -- consistent across
-all four estimator methods and plausibly attributable to shared
-underlying-event activity rather than anything exotic. All uncertainties
-throughout are computed by resampling composite quantities directly
-rather than propagating component errors separately, a distinction we
-show matters in practice. The result is a validated, closure-tested
-toolkit -- estimator, sensitivity curve, calibration factors, and
-kinematic-background subtraction -- ready to apply to real STAR/ALICE
-dijet data.
+estimator (NSB), and establish a general error-estimation framework
+(bootstrap resampling of the full quantity of interest, never its
+separately-estimated pieces) used throughout everything that follows.
+The full pipeline, cross-validated between independent Python and
+ROOT/C++ implementations, is applied to realistic PYTHIA~8 dijet Monte
+Carlo. Since PYTHIA output carries no independently known true MI, we
+develop a closure test that calibrates a synthetic model to the data's
+own statistics; applied to a full validation sample this finds NSB's
+bootstrap uncertainty under-covers by roughly $1.5$--$1.7\times$,
+improving substantially when the same test is run separately within
+$p_T$ bins. We further identify and correct a distinct systematic: any
+finite $p_T$ window induces real but kinematically trivial MI, since
+both jets' multiplicities and their $p_T$'s are correlated through
+momentum balance. A mixed-event subtraction -- pairing each jet with a
+$p_T$-matched partner from a different event -- isolates the
+beyond-kinematics MI; closure tests, both on synthetic data and at full
+statistics on the real sample's own fitted kinematics, show the naive
+estimator's finite-sample bias nearly cancels between the same-event and
+mixed-event terms, so the raw difference is close to unbiased even
+before rigorous correction. Applied to the real validation sample, the
+subtraction finds a nonzero beyond-kinematics component of order
+$0.003$~nats -- consistent across all four estimator methods and
+plausibly attributable to shared underlying-event activity rather than
+anything exotic. Throughout, we are careful about what this measurement
+can and cannot establish: a rigorously measured $I(A{:}B)$, with its
+estimator bias removed, its uncertainty calibrated, and its trivial
+kinematic component separated out, is the necessary foundation for any
+later physics interpretation, but not by itself a quantum witness. The
+result is a validated, closure-tested toolkit -- estimator, calibration
+factors, and kinematic-background subtraction -- ready to apply to real
+STAR/ALICE dijet data.
 \end{abstract}
 
 \tableofcontents
 
 % =============================================================================
 \section{Physics motivation}
+\label{sec:motivation}
 % =============================================================================
 
 Take a back-to-back dijet event (e.g.\ from $e^+e^-$, DIS, or $pp$
@@ -96,102 +95,75 @@ multiplicity counting -- the whole program rests on this ansatz.
 \textbf{The physics question:} by additionally measuring the \emph{joint}
 multiplicity distribution $P_{AB}(n_A,n_B)$ across both jets in the same
 event, we can construct the mutual information $I(A{:}B)$ between the two
-jets (defined in Sec.~\ref{sec:observable}). A large enough MI, in the
-right combination with the individual entropies, would signal
-correlations between the jets that cannot be explained by any classical
-joint probability distribution -- i.e.\ a genuine quantum (entanglement)
-signature surviving from the partonic state through hadronization, rather
-than an ordinary classical correlation (e.g.\ shared color flow, momentum
-conservation, or other QCD-driven but fundamentally classical
-correlations).
+jets (defined in Sec.~\ref{sec:observable}), a measure of how strongly
+correlated their multiplicities are. Under the Schmidt-decomposition
+ansatz above, a nonzero $I(A{:}B)$ is at least consistent with
+correlations surviving from the partonic state through hadronization --
+possibly including a genuine quantum (entanglement) contribution, on top
+of ordinary classical correlation (shared color flow, momentum
+conservation, or other QCD-driven but fundamentally classical dynamics).
 
-\textbf{Why this is subtle in practice:} any such claim is only as good as
-(a) correctly separating genuine quantum correlation from unavoidable
-classical correlation, and (b) correctly accounting for the finite size of
-real data samples, since MI estimated from a finite event sample is
-\textbf{always statistically biased}, and -- as we show below -- biased in
-exactly the direction that could be mistaken for a quantum excess if not
-handled carefully. This note works through both issues end to end.
+\textbf{Why this note does not chase a rigorous witness claim.} A natural
+sharper test would be conditional-entropy negativity, $S(B|A) =
+S_{AB}-S_A<0$ (equivalently $I(A{:}B)>\min(S_A,S_B)$) -- classically
+impossible, since Shannon conditional entropy of \emph{any} probability
+distribution built from real, counted outcomes is mathematically
+guaranteed to be $\geq0$. That is not a physical assumption but a theorem
+about frequencies of definite measurement outcomes, and it cuts both
+ways: it would make a genuine violation unambiguous \emph{if} the
+Schmidt-decomposition ansatz literally held all the way through
+hadronization, but it also means an \emph{observed} violation in real,
+finite-sample data can only ever be a statistical/estimator artifact --
+never directly-observed physics -- since the true classical value is
+provably non-negative by construction, regardless of the underlying
+dynamics. Separately, genuine (Ollivier--Zurek) quantum discord, the
+model-independent notion of ``quantumness'' in a correlation, is
+identically zero for any classical joint distribution built from count
+histograms; extracting a nonzero discord needs actual quantum-state
+tomography (e.g.\ the parallel $\Lambda\bar\Lambda$ spin-density-matrix
+program), not multiplicity counting. For both reasons, this note does not
+treat $I(A{:}B)$ measured from hadron multiplicities as a stand-alone
+quantum witness. What it \emph{is} good for is measuring $I(A{:}B)$
+itself rigorously and reproducibly -- correcting its finite-sample bias,
+calibrating its uncertainty, and separating genuine dynamical correlation
+from trivial kinematic correlation -- which is a well-posed statistical
+problem in its own right, and the necessary foundation before any
+comparison to the Schmidt-decomposition prediction can be taken
+seriously. That is the entire scope of what follows.
+
+\textbf{Why this is subtle in practice:} any such measurement is only as
+good as correctly accounting for the finite size of real data samples,
+since MI estimated from a finite event sample is \textbf{always
+statistically biased}, and -- as we show below -- biased in exactly the
+direction that could be mistaken for a large excess if not handled
+carefully. This note works through that problem end to end: bias,
+correction, uncertainty, closure testing, and a further kinematic
+background that mimics real correlation for entirely mundane reasons.
 
 % =============================================================================
-\section{The observable: MI, conditional entropy, and the quantum witness}
+\section{The observable: mutual information}
 \label{sec:observable}
 % =============================================================================
 
-From the per-jet and joint hadron-multiplicity distributions we can build
-three entropies and two derived quantities:
+From the per-jet and joint hadron-multiplicity distributions we build
+three Shannon entropies and combine them into the mutual information
+between the two jets:
 \begin{equation}
 S_A,\quad S_B,\quad S_{AB}
 \qquad\Longrightarrow\qquad
 I(A{:}B) = S_A+S_B-S_{AB},
-\qquad
-\SBA = S_{AB}-S_A .
 \end{equation}
-
-\paragraph{Mutual information alone cannot distinguish quantum from
-classical.} $I(A{:}B)>0$ just means the jets are correlated \emph{somehow}
--- a purely classical joint distribution (shared color flow,
-energy--momentum conservation, any ordinary QCD dynamics) also gives
-nonzero MI. A sharper diagnostic is needed.
-
-\paragraph{The sharper test: conditional entropy negativity.} For
-\emph{any} classical discrete probability distribution, Shannon
-conditional entropy obeys
-\begin{equation}
-\SBA = S_{AB}-S_A \;\geq\; 0 \qquad \text{(always, classically).}
-\end{equation}
-This is the classical subadditivity of Shannon entropy -- not an
-assumption about any particular physical model. Only the \emph{quantum}
-(von Neumann) conditional entropy can go negative, and only for entangled
-states. So \textbf{$\SBA<0$ is a hard classical impossibility}, and
-observing it (at sufficient statistical significance) would be direct
-evidence that the jets cannot be described by a classical joint
-probability distribution -- i.e.\ a genuine quantum signature.
-Equivalently, in terms of MI alone,
-\begin{equation}
-I(A{:}B) \;>\; \min(S_A,S_B)
-\qquad\Longleftrightarrow\qquad
-\SBA<0 \ \text{ or }\ S(A|B)<0,
-\end{equation}
-so MI exceeding the smaller of the two marginal entropies is the same
-statement in a different form. Both directions ($\SBA$ and $S(A|B)$) are
-worth checking independently, since conditional entropy is not symmetric.
-
-\paragraph{A scale-comparable form: normalized mutual information.}
-Absolute $I(A{:}B)$ is awkward to compare across different collision
-energies, kinematic selections, or $p_T$ bins, since $S_A$ and $S_B$
-themselves grow with e.g.\ jet $p_T$ (Sec.~\ref{sec:pythia-ptdep}) and so
-set a different natural scale for $I$ in every bin. The
-$\min(S_A,S_B)$ appearing above already does the needed normalization:
-\begin{equation}
-\NMI \;\equiv\; \frac{I(A{:}B)}{\min(S_A,S_B)} \, .
-\end{equation}
-Classically $\NMI\in[0,1]$ always, by the same subadditivity argument as
-$\SBA\geq0$; $\NMI>1$ is the identical classical-bound violation as
-$\SBA<0$, just expressed as a ratio rather than a difference. Since
-$\NMI$ is dimensionless and bounded, it is directly comparable across
-$p_T$ bins, run periods, or even experiments in a way raw $I(A{:}B)$ is
-not, while remaining exactly as valid a quantum witness as $\SBA$ itself.
-This is a standard normalization in the wider MI literature (one of
-several conventional choices, e.g.\ Kva\l{}seth 1987; $\min$-normalization
-is the tightest of these and the one that coincides exactly with the
-classical bound already in use here).
-
-\paragraph{What this test cannot do: genuine quantum discord.} True
-(Ollivier--Zurek) quantum discord is defined by optimizing conditional
-entropy over \emph{quantum measurement bases} -- non-commuting projective
-measurements that don't reduce to simply reading off a classical value.
-Hadron-multiplicity data $(N_A,N_B)$ is, by construction, a classical
-joint distribution (a histogram). For any classical joint distribution,
-the optimal ``measurement'' on $B$ is trivially just observing $N_B$
-exactly, which makes the classical-correlation piece $J(A{:}B)$ equal to
-the \emph{full} $I(A{:}B)$ exactly -- so discord $D=I-J\equiv 0$
-identically, for any classical distribution, with no exception. Extracting
-a genuinely nonzero discord requires actual quantum-state tomography
-(e.g.\ the $\Lambda\bar\Lambda$ spin-density-matrix channel), not
-multiplicity counting. \textbf{The conditional-entropy-negativity test
-above is therefore the correct and complete witness available from this
-kind of data} -- the rest of this note is about measuring it reliably.
+where $S_A = -\sum_n P_A(n)\ln P_A(n)$ is the Shannon entropy of jet
+$A$'s hadron-multiplicity distribution (likewise $S_B$), and $S_{AB} =
+-\sum_{n_A,n_B} P_{AB}(n_A,n_B)\ln P_{AB}(n_A,n_B)$ is the joint entropy
+of the two jets' multiplicities measured together in the same event.
+$I(A{:}B)\geq0$ always, with equality only if $N_A$ and $N_B$ are
+statistically independent; it is the quantity measured, corrected, and
+calibrated throughout the rest of this note. As discussed in
+Sec.~\ref{sec:motivation}, $I(A{:}B)>0$ on its own only establishes that
+the two jets' multiplicities are correlated \emph{somehow} -- consistent
+with, but not proof of, the entanglement-entropy interpretation
+motivating this measurement.
 
 % =============================================================================
 \section{The statistical problem: finite-sample bias}
@@ -242,9 +214,7 @@ $\hat S_A+\hat S_B$ does -- and since $S_{AB}$ enters with a
 bias on $\hat I$. In the extreme case $N \ll K_A K_B$ (badly undersampled
 joint histogram), this produces large \emph{phantom} apparent mutual
 information even for truly independent variables -- sampling noise alone
-can masquerade as a real correlation, and by the same mechanism can
-masquerade as evidence for the ``quantum'' side of the $\SBA<0$ test above
-if not corrected.
+can masquerade as a real correlation if not corrected.
 
 A commonly-quoted shortcut version of Eq.~\eqref{eq:mi-bias} is
 $(K_A-1)(K_B-1)/(2N)$; this is not a different formula, it is
@@ -259,14 +229,10 @@ in Sec.~\ref{sec:corrections}.
 \paragraph{Practical consequence.} Comparing the same underlying physics
 across data samples of different size -- different STAR running periods,
 different luminosity, different jet-cone or multiplicity binning choices
--- will report systematically different central MI (and $\SBA$) values
-purely from this effect, with zero change in the actual QCD physics.
+-- will report systematically different central MI values purely from
+this effect, with zero change in the actual QCD physics.
 Secs.~\ref{sec:toymc}--\ref{sec:nsb} demonstrate this concretely with a
-toy model and work through three ways to correct for it;
-Sec.~\ref{sec:sensitivity} turns the corrected, best-behaved estimator
-into a quantitative statement about how large a genuine quantum signal
-would need to be, at a given event count, to be distinguishable from this
-bias.
+toy model and work through three ways to correct for it.
 
 % =============================================================================
 \section{Toy Monte Carlo test bed}
@@ -288,12 +254,10 @@ Marginalizing over $\Lambda$ gives each jet a \textbf{Negative Binomial}
 multiplicity distribution (the standard KNO-like form used for hadron
 multiplicities), and the shared $\Lambda$ induces a genuine -- but purely
 \textbf{classical} -- correlation between $N_A$ and $N_B$, i.e.\
-$\Itrue>0$ with $\SBA_{\rm true}$ solidly positive, exactly as required
-classically. This is a convenient sandbox: we know the true joint
+$\Itrue>0$. This is a convenient sandbox: we know the true joint
 distribution (to arbitrary precision, from a huge reference sample), so we
-can measure the \emph{bias} of any estimator directly, and later measure
-how large a genuine quantum excess would need to be to be distinguishable
-from this classical baseline's own statistical noise. Parameters used
+can measure the \emph{bias} of any estimator directly against a known
+answer. Parameters used
 throughout: $k=3.0$, $\theta=8.0$, $c=0.9$ (giving
 $\mathrm{corr}(N_A,N_B)\approx 0.88$).
 
@@ -387,6 +351,7 @@ narrow ridge and $K_{AB}\ll K_AK_B$, so using the product in place of the
 observed value wildly overcorrects and can drive $\hat I_{MM}$ negative.
 
 \subsection{Shuffle-subtraction (label-permutation null)}
+\label{sec:shuffle}
 
 Randomly permuting the $B$-jet labels relative to the $A$-jet labels
 \emph{within the same sample} destroys any true correlation
@@ -583,165 +548,132 @@ range, or a data-dependent bias is reintroduced through the back door.
 shuffle-subtraction (a 1D numerical integral instead of a closed-form
 correction or a handful of permutations), but it remains a fraction of a
 second per event sample -- entirely practical for a real analysis,
-including a full jackknife or bootstrap for uncertainty quantification.
-\item The same estimator applies directly to $\SBA=S_{AB}-S_A$ -- swap in
-the NSB entropies there instead of the naive/MM/shuffle versions before
-making any negative-conditional-entropy (quantum) claim, as done next.
+including a full bootstrap for uncertainty quantification
+(Sec.~\ref{sec:errors} works this out in detail).
 \end{itemize}
 
 % =============================================================================
-\section{Putting it together: quantum-signal detection sensitivity}
-\label{sec:sensitivity}
+\section{Error estimation}
+\label{sec:errors}
 % =============================================================================
 
-Section~\ref{sec:observable} established $\SBA=S_{AB}-S_A$ as the correct,
-computable witness (provably $\geq0$ classically), and
-Secs.~\ref{sec:bias}--\ref{sec:nsb} established that NSB is the
-best-behaved bias-corrected estimator, especially at small $N$. Here we
-combine both: since our toy model is itself purely classical, its true
-$\SBA$ is a known, solidly positive number ($\SBA_{\rm true}=3.1524$
-nats) -- exactly the right sandbox to measure the \textbf{statistical
-noise floor} of the NSB estimator against a known ground truth, and turn
-that into a quantitative statement about how large a genuine quantum
-excess would need to be, at a given event count, to be distinguishable
-from this noise floor.
+Every number quoted so far needs an uncertainty attached to it, and the
+same machinery is used for that throughout this note -- in the toy Monte
+Carlo study, in the PYTHIA~8 validation, and in every closure test. This
+section collects that machinery in one place, defines the parameters
+that control it ($N_{\rm boot}$, $N_{\rm repeats}$, $N_{\rm shuffles}$)
+precisely, and states the general principle everything downstream
+follows.
 
-\textbf{Design:} for a grid of $N$, we draw many independent samples from
-the same generative model, compute $\hat S(B|A)_{\rm NSB}$ for each, and
-take the spread over draws as the estimator's sampling uncertainty
-$\sigma_{\rm NSB}(N)$ at that statistics. A hypothetical genuine quantum
-excess of magnitude $\Delta$ is then detectable at $z$ standard
-deviations once
-\begin{equation}
-\Delta \;>\; z\,\sigma_{\rm NSB}(N).
-\end{equation}
-Equivalently, the \textbf{minimum detectable quantum signal} at a chosen
-confidence level ($z=3$, a common ``solid evidence'' threshold, used
-below) is $\Delta_{\rm min}(N)=z\,\sigma_{\rm NSB}(N)$. In a real analysis
-with one actual dataset -- not a synthetic model with known truth --
-$\sigma_{\rm NSB}(N)$ would be estimated directly from that dataset via
-bootstrap or jackknife resampling, rather than from independent Monte
-Carlo replicates as done here for demonstration.
+\subsection{The general principle: bootstrap the quantity itself}
+\label{sec:errors-principle}
 
-Figure~\ref{fig:noise-floor} shows the NSB (and, for comparison, naive and
-Miller--Madow) estimates of $\SBA$ vs.\ $N$, together with their
-sampling standard deviation. NSB has both the smallest bias (its mean
-tracks $\SBA_{\rm true}$ most closely, especially at small $N$) and a
-noise floor that shrinks cleanly with $N$, following the expected
-$1/\sqrt{N}$ statistical scaling.
+An uncertainty on any estimator here is obtained by \textbf{resampling
+events with replacement} from the actual sample being analyzed (a
+standard nonparametric bootstrap), recomputing the \emph{entire}
+quantity of interest -- $I(A{:}B)$ itself, or later the mixed-event
+difference $I_{\rm same}-I_{\rm mix}$ -- on each resample, and taking the
+spread of that recomputed quantity across resamples as its standard
+error. The one rule that matters throughout this note: \textbf{a derived
+or composite quantity must be bootstrapped directly, together, from the
+same resamples} -- never assembled by separately bootstrapping its
+pieces and combining their errors analytically afterward. The two are
+not interchangeable whenever the pieces are correlated (and they usually
+are, since they are computed from the same events): propagating
+component errors analytically either ignores that correlation or
+requires modeling it explicitly, while resampling the full composite
+quantity captures it automatically, at no extra conceptual cost. This
+distinction was not academic in developing this pipeline -- an early
+version of the analysis bootstrapped one composite quantity correctly
+while computing a closely related one from a leftover analytic formula
+in the same function, giving visibly inconsistent, overly conservative
+error bars for the latter until the two were unified under one
+resampling procedure. The lesson generalizes: any pipeline computing
+multiple derived statistics from what is meant to be one bootstrap
+procedure should verify that \emph{all} of them actually reuse the same
+resamples, not just that each individually looks plausible.
 
-\begin{figure}[htb]
-\centering
-\includegraphics[width=\textwidth]{figs/fig07_sba_noise_floor.png}
-\caption{Left: $\SBA$ estimators vs.\ $N$ (bands: $\pm1\sigma$ over
-repeated samples). Right: sampling standard deviation of each estimator
-vs.\ $N$, with a $1/\sqrt{N}$ reference slope.}
-\label{fig:noise-floor}
-\end{figure}
+\subsection{The three counters: $N_{\rm boot}$, $N_{\rm repeats}$,
+$N_{\rm shuffles}$}
+\label{sec:errors-counters}
 
-Converting the NSB noise floor into a minimum-detectable-signal curve
-(Fig.~\ref{fig:detection-sensitivity}) and fitting a power law gives a
-direct, quantitative answer to ``how big must a quantum signal be, at a
-given statistics, to be believable'':
+Three distinct integers control the error-estimation machinery in this
+note, and they answer three different questions. Confusing them is an
+easy mistake, since all three superficially look like ``how many times do
+we repeat something.''
 
-\begin{table}[h]
-\centering
-\caption{Minimum event count $N$ needed for a $3\sigma$ detection of a
-hypothetical quantum-correlation excess of the given magnitude, from the
-fitted $\Delta_{\rm min}(N)\propto N^{-0.72}$ power law.}
-\begin{tabular}{rr}
-\toprule
-Assumed $|\SBA_{\rm quantum}|$ (nats) & $N$ needed for $3\sigma$ detection \\
-\midrule
-0.500 & 201 \\
-0.200 & 722 \\
-0.100 & 1{,}899 \\
-0.050 & 4{,}995 \\
-0.020 & 17{,}934 \\
-0.010 & 47{,}164 \\
-\bottomrule
-\end{tabular}
-\end{table}
-
-\begin{figure}[htb]
-\centering
-\includegraphics[width=0.75\textwidth]{figs/fig08_detection_sensitivity.png}
-\caption{Minimum detectable $|\SBA|$ excess at $3\sigma$, vs.\ event
-count $N$, with a power-law fit for interpolation/extrapolation.}
-\label{fig:detection-sensitivity}
-\end{figure}
-
-\paragraph{Caveats to carry into the real analysis.}
 \begin{itemize}
-\item $\sigma_{\rm NSB}(N)$ here is measured \emph{at the true classical
-value} ($\SBA_{\rm true}\approx$ a few nats for our toy correlation
-strength), not at the boundary $\SBA=0$. Entropy-estimator variance
-depends on the shape of the underlying distribution, not just $N$, so the
-true noise floor near a genuinely small or slightly-negative $\SBA$ could
-differ somewhat from this estimate. For the real STAR data, this bootstrap
-procedure should be re-run centered on the actual observed operating point
-(via jackknife/bootstrap on the real dataset itself), rather than trusting
-this toy-model number directly.
-\item This procedure characterizes sensitivity to a violation of the
-classical conditional-entropy bound using multiplicity data alone
-(Sec.~\ref{sec:observable}). It is not a substitute for an actual quantum
-witness such as a Bell/CHSH inequality on the $\Lambda\bar\Lambda$ spin
-observables, which remains the model-independent way to certify
-entanglement rather than merely rule out one particular classical
-description.
+\item \textbf{$N_{\rm boot}$ -- bootstrap resamples per point estimate.}
+For a single dataset (real or simulated), $N_{\rm boot}$ is the number of
+resample-with-replacement draws used to build \emph{one} uncertainty
+$\sigma$ on \emph{one} point estimate. It controls how precisely that
+$\sigma$ itself is known: the bootstrap standard error of a bootstrap
+standard deviation estimated from $N_{\rm boot}$ resamples scales
+roughly as $\sigma/\sqrt{2(N_{\rm boot}-1)}$, so $N_{\rm boot}=50$ pins
+down $\sigma$ to within $\approx10\%$, $N_{\rm boot}=200$ to
+$\approx5\%$. Larger $N_{\rm boot}$ costs proportionally more compute
+per point estimate but does not change what is being measured, only how
+precisely its uncertainty is known.
+\item \textbf{$N_{\rm repeats}$ -- independent fresh draws, closure tests
+only.} Where $N_{\rm boot}$ characterizes the uncertainty on \emph{one}
+measurement, $N_{\rm repeats}$ is specific to the closure-test machinery
+(Sec.~\ref{sec:closure}): the number of independent fresh samples drawn
+from the calibrated model, each analyzed completely independently
+(its own point estimate \emph{and} its own $N_{\rm boot}$-fold bootstrap
+$\sigma$), to build a \emph{distribution} of pulls across repeats. This
+answers a meta-question -- ``is the uncertainty well-calibrated, on
+average, across many hypothetical realizations of this dataset'' -- that
+a single measurement's own bootstrap can never answer about itself.
+$N_{\rm repeats}$ controls how trustworthy the reported pull \emph{mean}
+and \emph{standard deviation} themselves are: with $N_{\rm repeats}=30$,
+the pull standard deviation is itself only known to within roughly
+$\pm13\%$ ($1/\sqrt{2\times29}$), so a closure test run with few repeats
+should be read as indicative, not precise, and the default of $30$--$100$
+used throughout this note is a practical compromise against the cost of
+also running a full $N_{\rm boot}$-fold bootstrap \emph{inside} every one
+of those repeats.
+\item \textbf{$N_{\rm shuffles}$ -- label permutations, shuffle-correction
+only.} Specific to the shuffle-subtraction estimator
+(Sec.~\ref{sec:shuffle}): the number of times the $B$-labels are randomly
+permuted to build that estimator's own null distribution. It is internal
+to computing \emph{one} shuffle-corrected point estimate and is
+unrelated to $N_{\rm boot}$ or $N_{\rm repeats}$ -- in particular, it is
+irrelevant to NSB, which never shuffles anything.
 \end{itemize}
 
-% =============================================================================
-\section{Summary and recommendations from the toy Monte Carlo study}
-% =============================================================================
+In short: $N_{\rm shuffles}$ is consumed \emph{inside} one shuffle
+estimate; $N_{\rm boot}$ resamples \emph{are} one uncertainty estimate;
+$N_{\rm repeats}$ (closure tests only) repeats the entire
+measure-plus-its-own-uncertainty procedure to check whether that
+uncertainty behaves the way it claims to.
 
-\begin{enumerate}
+\subsection{Where each is used in this note}
 
-\item \textbf{The correct witness} is $\SBA=S_{AB}-S_A$ (and $S(A|B)$,
-check both directions), which must be $\geq0$ for any classical
-distribution. Genuine quantum discord (Ollivier--Zurek) cannot be
-computed from hadron-count histograms alone -- any classical joint
-distribution trivially gives discord $=0$; it would require actual
-quantum-state tomography (e.g.\ the $\Lambda\bar\Lambda$
-spin-density-matrix channel).
-
-\item \textbf{The naive plug-in MI estimator is always biased upward},
-with leading term $\approx(K_{AB}-K_A-K_B+1)/(2N)$. Coarser binning or
-fewer events both make it worse -- comparing different STAR running
-periods, luminosities, or binning choices will report different central
-MI values from what should be the same physics, purely from this effect.
-
-\item \textbf{Miller--Madow} (done correctly, using the observed
-$K_{AB}$, not the product $K_AK_B$) and \textbf{shuffle-subtraction} both
-substantially reduce this bias and stay well-behaved, but neither is exact
-at small $N$: Miller--Madow is a first-order truncation;
-shuffle-subtraction tends to systematically overcorrect when the true
-correlation is strong.
-
-\item \textbf{NSB} is the recommended estimator for the real analysis: a
-Bayesian posterior-mean entropy built on a prior specifically constructed
-to be uninformative about entropy itself. It tracks the truth closely
-across the entire tested $N$ range, including deep in the
-severely-undersampled regime where the other methods struggle, at a
-modest computational cost.
-
-\item \textbf{Before claiming any quantum-correlation excess}, bias-correct
-with NSB and compare against the estimator's own sampling noise floor at
-that $N$ (bootstrapped from the real dataset via jackknife/bootstrap, not
-assumed from this toy model). Section~\ref{sec:sensitivity} works this out
-quantitatively: the NSB noise floor shrinks $\propto 1/\sqrt{N}$, giving a
-concrete minimum-detectable-signal curve
-$\Delta_{\rm min}(N)=z\,\sigma_{\rm NSB}(N)$ -- a direct, quotable answer
-to ``how big must a genuine quantum excess be, at a given event count, to
-be distinguishable from finite-sample bias and noise.''
-
-\item \textbf{This entire procedure only tests a violation of the
-classical conditional-entropy bound.} It is a necessary check before any
-stronger quantum claim, but is not itself a model-independent entanglement
-certification -- that role is played by the Bell/CHSH-type inequality on
-spin observables in the parallel $\Lambda\bar\Lambda$ program.
-
-\end{enumerate}
+\begin{itemize}
+\item \textbf{Toy MC bias study} (Sec.~\ref{sec:toymc}): repeated draws
+at each sample size $N$ are used directly to show the scatter of
+$\hat I_{\rm naive}$ around its mean at that $N$ (Fig.~\ref{fig:bias-vs-N})
+-- the same conceptual role as $N_{\rm repeats}$ above, though there the
+goal is visualizing the bias curve itself rather than a pull distribution
+against a bootstrap $\sigma$.
+\item \textbf{PYTHIA~8 validation} (Sec.~\ref{sec:pythia}): every
+reported point estimate and its error bar comes from a single
+$N_{\rm boot}$-fold bootstrap on the actual generator sample, following
+Sec.~\ref{sec:errors-principle} throughout -- e.g.\ the multi-method
+comparison (Fig.~\ref{fig:py-method-comparison}) bootstraps each method's
+$I(A{:}B)$ independently in every $p_T$ bin.
+\item \textbf{Closure tests} (Sec.~\ref{sec:closure}): $N_{\rm repeats}$
+fresh draws from the calibrated model, each with its own
+$N_{\rm boot}$-fold bootstrap, exactly as defined above.
+\item \textbf{Mixed-event subtraction} (Sec.~\ref{sec:mixed}): a further
+wrinkle on the same principle -- since $I_{\rm same}$ and $I_{\rm mix}$
+are computed from overlapping, correlated event samples, their
+\emph{difference} is bootstrapped \emph{jointly}: each of the
+$N_{\rm boot}$ resamples rebuilds both the same-event and the mixed-event
+pairs (re-matching partners within that resample) and recomputes the
+full difference, never bootstrapping the two terms separately and
+subtracting their errors afterward.
+\end{itemize}
 
 % =============================================================================
 \section{Validation on PYTHIA~8 Monte Carlo simulation}
@@ -815,7 +747,8 @@ sqrt color scale (cf.\ Fig.~\ref{fig:marginals-joint}).}
 \begin{figure}[htb]
 \centering
 \includegraphics[width=\textwidth]{figs/dijet_entropy_result_truth_pt_dists.png}
-\caption{PYTHIA~8: leading- and subleading-jet $p_T$ distributions.}
+\caption{PYTHIA~8: leading- and subleading-jet $p_T$ distributions
+(log-scale $y$-axis, to show the falling spectrum's tail).}
 \label{fig:py-pt-dist}
 \end{figure}
 
@@ -892,33 +825,26 @@ expected from the bias mechanism above, while Miller--Madow/shuffle/NSB
 agree closely with each other, consistent with all three having converged
 toward the true value at this statistics (matching the closure seen among
 independently-biased estimators at large $N$ in the toy study,
-Sec.~\ref{sec:toymc}). The conditional entropy $\SBA=2.65$~nats sits far
-above the classical floor, with no indication of a quantum violation --
-expected and unsurprising, since PYTHIA~8 is itself a classical
-event-by-event simulator with no entanglement built into its hadronization
-model. This measurement is a validation of the estimator machinery, not a
-physics claim; the analogous measurement on real detector data is where a
-genuine quantum question would be asked.
+Sec.~\ref{sec:toymc}). This measurement is a validation of the estimator
+machinery, not a physics claim.
 
 \begin{figure}[htb]
 \centering
-\includegraphics[width=\textwidth]{figs/dijet_entropy_result_truth_summary.png}
-\caption{PYTHIA~8: all four MI estimators (left) and $\SBA$ (right) on
-the full sample, bootstrap error bars.}
+\includegraphics[width=0.55\textwidth]{figs/dijet_entropy_result_truth_summary_MI_only.png}
+\caption{PYTHIA~8: all four MI estimators on the full sample, bootstrap
+error bars.}
 \label{fig:py-summary}
 \end{figure}
 
 \subsection{Differential measurement vs.\ jet $p_T$}
 
-Figures~\ref{fig:py-entropy-pt}--\ref{fig:py-sba-pt} show $S_A,S_B,S_{AB}$,
-$I(A{:}B)$, and $\SBA$ (NSB) in quantile bins of leading-jet $p_T$. All
-three entropies rise smoothly with $p_T$ (Fig.~\ref{fig:py-entropy-pt}),
+Figures~\ref{fig:py-entropy-pt}--\ref{fig:py-mi-pt} show $S_A,S_B,S_{AB}$
+and $I(A{:}B)$ (NSB) in quantile bins of leading-jet $p_T$. All three
+entropies rise smoothly with $p_T$ (Fig.~\ref{fig:py-entropy-pt}),
 directly reflecting the multiplicity growth of Sec.~\ref{sec:pythia-ptdep}.
 $I(A{:}B)$ (Fig.~\ref{fig:py-mi-pt}) also rises with $p_T$, modestly at
 low-to-mid $p_T$ and more sharply in the highest (widest, most
-statistics-limited) bin; $\SBA$ (Fig.~\ref{fig:py-sba-pt}) stays solidly
-positive and rising throughout, consistent with a classical description at
-every $p_T$ probed.
+statistics-limited) bin.
 
 \begin{figure}[htb]
 \centering
@@ -934,153 +860,32 @@ every $p_T$ probed.
 \label{fig:py-mi-pt}
 \end{figure}
 
-\begin{figure}[htb]
-\centering
-\includegraphics[width=0.8\textwidth]{figs/dijet_entropy_result_truth_SBA_vs_pt.png}
-\caption{PYTHIA~8: $\SBA$ (NSB) vs.\ leading-jet $p_T$.}
-\label{fig:py-sba-pt}
-\end{figure}
-
 \subsection{Multi-method comparison vs.\ $p_T$}
 
 Figure~\ref{fig:py-method-comparison} overlays naive/Miller--Madow/
-shuffle/NSB for $I(A{:}B)$, and naive/Miller--Madow/NSB for $\SBA$ (no
-shuffle analogue, Sec.~\ref{sec:nsb}), each with bootstrap error bars
-computed by the same unified procedure (Sec.~\ref{sec:sensitivity}). The
-bias hierarchy naive~$>$~Miller--Madow~$\gtrsim$~NSB~$\approx$~shuffle
-seen on the full sample (Fig.~\ref{fig:py-summary}) persists across
-$p_T$ bins, most visibly in the highest-$p_T$ (lowest-statistics) bin,
-where naive's upward bias is largest -- exactly the pattern the toy study
-predicts for a bin with fewer events and a wider effective alphabet.
+shuffle/NSB for $I(A{:}B)$, each with bootstrap error bars computed by
+the same unified procedure (Sec.~\ref{sec:errors}). The bias hierarchy
+naive~$>$~Miller--Madow~$\gtrsim$~NSB~$\approx$~shuffle seen on the full
+sample (Fig.~\ref{fig:py-summary}) persists across $p_T$ bins, most
+visibly in the highest-$p_T$ (lowest-statistics) bin, where naive's
+upward bias is largest -- exactly the pattern the toy study predicts for
+a bin with fewer events and a wider effective alphabet.
 
 \begin{figure}[htb]
 \centering
-\includegraphics[width=\textwidth]{figs/dijet_entropy_result_truth_method_comparison_vs_pt.png}
-\caption{PYTHIA~8: method comparison for $I(A{:}B)$ (left) and $\SBA$
-(right) vs.\ leading-jet $p_T$, bootstrap error bars throughout.}
+\includegraphics[width=0.6\textwidth]{figs/dijet_entropy_result_truth_method_comparison_vs_pt_MI_only.png}
+\caption{PYTHIA~8: method comparison for $I(A{:}B)$ vs.\ leading-jet
+$p_T$, bootstrap error bars throughout.}
 \label{fig:py-method-comparison}
 \end{figure}
 
-\subsection{Cross-validation with an independent implementation, and
-normalized mutual information}
-\label{sec:pythia-nmi}
-
-The full pipeline was independently re-implemented in ROOT/C++ (own
-validated digamma/trigamma special functions, own NSB posterior
-computation, own bootstrap machinery) as a cross-check against the
-Python implementation above, applied to the \emph{same} generated event
-sample ($N\approx1.9\times10^5$, identical to
-Secs.~\ref{sec:pythia}--\ref{sec:pythia-ptdep}). This section reports the
-ROOT pipeline's results for $\NMI$ (Sec.~\ref{sec:observable}), which
-were not part of the original Python-only analysis above.
-
-Figure~\ref{fig:py-nmi-pt} shows $\NMI$ (NSB) vs.\ leading-jet $p_T$: all
-values sit at $\NMI\ll1$, far below the classical bound, consistent with
-the small $I(A{:}B)$ values already seen in absolute terms
-(Fig.~\ref{fig:py-mi-pt}) and, as before, expected and unsurprising for a
-classical event generator. The value of $\NMI$ here is methodological
-rather than a physics result on this dataset: it demonstrates the
-normalized witness is measurable with the same NSB machinery as $I$ and
-$\SBA$, and (Sec.~\ref{sec:pitfall} below) that doing so correctly
-requires some care.
-
-\begin{figure}[htb]
-\centering
-\includegraphics[width=0.8\textwidth]{figs/root_NMI_vs_pt.png}
-\caption{PYTHIA~8 (ROOT implementation): $\NMI=I(A{:}B)/\min(S_A,S_B)$
-(NSB) vs.\ leading-jet $p_T$. All values are far below the classical
-bound $\NMI=1$, as expected for a classical event generator.}
-\label{fig:py-nmi-pt}
-\end{figure}
-
-\subsection{A methodological pitfall: consistent uncertainty propagation
-for derived ratios}
-\label{sec:pitfall}
-
-During development, the ROOT pipeline's multi-method comparison plot for
-$\NMI$ (the $\NMI$ analogue of Fig.~\ref{fig:py-method-comparison}) showed
-NSB error bars roughly $5$--$6\times$ larger, relative to the central
-value, than NSB's own error bars on $I(A{:}B)$ in the immediately
-adjacent panel (Fig.~\ref{fig:root-nmi-bug}, left) -- despite both
-quantities being built from the same $S_A,S_B,S_{AB}$ on the same events.
-Tracing this down surfaced a genuine implementation bug, worth recording
-here since it is a general pitfall for any bootstrap-based uncertainty on
-a \emph{derived, nonlinear} quantity (a ratio, in this case), not
-specific to this codebase.
-
-\paragraph{The bug.} $I(A{:}B)$'s bootstrap uncertainty was correctly
-computed by resampling the event sample $N_{\rm boot}$ times and
-recomputing $I$ fresh on each resample. $\NMI$'s point estimate used the
-same procedure, but its \emph{uncertainty} was accidentally taken from an
-older, separate analytic error-propagation formula (independence
-approximation on $\mathrm{Var}(I)$ and $\mathrm{Var}(\min(S_A,S_B))$
-combined in quadrature) left over from an earlier version of the
-pipeline -- a different, more conservative methodology than the bootstrap
-used for $I$ and $\SBA$ in the very same function, silently mixed into
-one comparison plot.
-
-\paragraph{The fix.} $\NMI$ is now bootstrapped exactly like $I$ and
-$\SBA$: each resample's already-computed $S_A,S_B$ (needed anyway for
-that resample's $I$) are reused to form $\NMI_{\rm resample} =
-I_{\rm resample}/\min(S_{A,\rm resample},S_{B,\rm resample})$, and the
-spread of $\NMI_{\rm resample}$ across resamples gives its uncertainty --
-at no extra computational cost, since $S_A,S_B$ were already being
-computed for $I$'s own bootstrap. Figure~\ref{fig:root-nmi-bug} illustrates
-the discrepancy that led to identifying this;
-Figure~\ref{fig:root-nmi-fixed} confirms the fix.
-
-\begin{figure}[htb]
-\centering
-\includegraphics[width=0.48\textwidth]{figs/root_method_comparison_MI_vs_pt.png}
-\includegraphics[width=0.48\textwidth]{figs/root_method_comparison_NMI_vs_pt_BUGGY.png}
-\caption{The bug, illustrated: $I(A{:}B)$ method comparison (left,
-unaffected) alongside the \emph{pre-fix} $\NMI$ method comparison (right)
-from the same pipeline run. NSB's $\NMI$ error bars are visibly far wider,
-relative to the central values, than $I$'s -- despite both being derived
-from the same underlying quantities on the same events. This
-discrepancy was the symptom that led to identifying the mixed-methodology
-bug described in the text.}
-\label{fig:root-nmi-bug}
-\end{figure}
-
-\begin{figure}[htb]
-\centering
-\includegraphics[width=0.48\textwidth]{figs/root_method_comparison_NMI_vs_pt_FIXED.png}
-\includegraphics[width=0.48\textwidth]{figs/root_method_comparison_SBA_vs_pt.png}
-\caption{Post-fix confirmation, same pipeline and dataset as
-Fig.~\ref{fig:root-nmi-bug}: $\NMI$ method comparison (left) now shows
-NSB error bars comparable in relative size to naive/Miller--Madow's, in
-line with $I(A{:}B)$'s panel in Fig.~\ref{fig:root-nmi-bug} -- the
-mixed-methodology discrepancy is gone. $\SBA$ method comparison (right,
-never affected by this particular bug) shown alongside for reference,
-confirming consistent bootstrap behavior across all three quantities.}
-\label{fig:root-nmi-fixed}
-\end{figure}
-
-\paragraph{The general lesson.} When an uncertainty is obtained by
-bootstrap resampling, every derived quantity built from the same
-underlying estimate should be bootstrapped \emph{together, from the same
-resamples} -- not by mixing bootstrap for some derived quantities and
-analytic error propagation for others, even when both individually seem
-reasonable. This also happens to be the more \emph{correct} choice
-statistically, not merely the more consistent one: bootstrapping a ratio
-directly captures the true correlation between numerator and denominator
-(both estimated from the same event sample), whereas independence-
-approximation error propagation assumes that correlation away and is
-therefore both methodologically inconsistent \emph{and} typically
-biased toward overly conservative (too large) uncertainties. This
-pitfall generalizes beyond $\NMI$: any pipeline computing multiple
-derived statistics from one bootstrap procedure should verify that
-\emph{all} of them are actually using the same resamples, not just that
-each individually looks plausible.
-
 % =============================================================================
-\section{Tier-2 closure test: calibrating estimator uncertainty on
-realistic data}
+\section{Closure test: calibrating estimator uncertainty on realistic
+data}
 \label{sec:closure}
 % =============================================================================
 
-The toy study (Secs.~\ref{sec:toymc}--\ref{sec:sensitivity}) validates
+The toy study (Secs.~\ref{sec:toymc}--\ref{sec:nsb}) validates
 the estimator suite against a \emph{known} true MI, by construction. Real
 PYTHIA~8 output, and eventually real STAR/ALICE data, has no such known
 truth to validate against directly. This section describes a closure test
@@ -1107,24 +912,22 @@ achieved fit quality is reported explicitly rather than assumed.
 \item \textbf{Establish a pseudo-truth.} Draw a very large sample
 (typically $10^6$--$5\times10^6$ events) from the \emph{fitted} model.
 At this scale the naive estimator's own bias
-($\mathcal{O}(1/N)$, Sec.~\ref{sec:bias}) is negligible, so $I,\SBA,\NMI$
-computed on this sample are treated as numerically exact
-($I_{\rm true},\SBA_{\rm true},\NMI_{\rm true}$) -- calibrated to
-resemble the real measurement's shape and correlation strength, not an
-arbitrary toy scenario.
+($\mathcal{O}(1/N)$, Sec.~\ref{sec:bias}) is negligible, so $I(A{:}B)$
+computed on this sample is treated as numerically exact
+($I_{\rm true}$) -- calibrated to resemble the real measurement's shape
+and correlation strength, not an arbitrary toy scenario.
 \item \textbf{Closure.} Draw $N_{\rm repeats}$ independent fresh samples
 from the fitted model, each at the real dataset's actual event count $N$
 (and using the real analysis's alphabet), and run the full
 naive/Miller--Madow/shuffle/NSB pipeline on each.
 \item \textbf{Check bias and calibration.} For NSB specifically, form the
 \emph{pull} for each repeat,
-$z = (\hat X_{\rm NSB}-X_{\rm true})/\sigma_{\rm NSB}$
-for $X\in\{I,\SBA,\NMI\}$, using that repeat's own bootstrap
-$\sigma_{\rm NSB}$ (Sec.~\ref{sec:pitfall}). If the estimator is unbiased
-and its uncertainty well-calibrated, the pull distribution across repeats
-should be standard normal: mean $0$, standard deviation $1$, with
-$\sim\!68\%$ of repeats within $\pm1\sigma$ and $\sim\!95\%$ within
-$\pm2\sigma$.
+$z = (\hat I_{\rm NSB}-I_{\rm true})/\sigma_{\rm NSB}$,
+using that repeat's own bootstrap $\sigma_{\rm NSB}$
+(Sec.~\ref{sec:errors}). If the estimator is unbiased and its uncertainty
+well-calibrated, the pull distribution across repeats should be standard
+normal: mean $0$, standard deviation $1$, with $\sim\!68\%$ of repeats
+within $\pm1\sigma$ and $\sim\!95\%$ within $\pm2\sigma$.
 \end{enumerate}
 This is purely diagnostic throughout -- no bias or coverage correction is
 applied to any reported number anywhere in this note; the closure test's
@@ -1135,17 +938,15 @@ trusted at face value for a given $(N,\text{alphabet})$, not to patch it.
 \label{sec:closure-results}
 
 Applying this to the full $14$~TeV validation sample
-(Fig.~\ref{fig:closure-I}, $I(A{:}B)$; Fig.~\ref{fig:closure-nmi}, $\NMI$)
-gives two consistent findings:
+(Fig.~\ref{fig:closure-I}) gives two consistent findings:
 
 \begin{itemize}
 \item \textbf{A mean pull of approximately $-1$}: NSB systematically
-under-\emph{estimates} $I(A{:}B)$ (and correspondingly $\NMI$) by
-roughly one of its own reported bootstrap-$\sigma$'s, on average, at this
-sample's statistics. This is a real, non-negligible bias, though modest
-in scale.
+under-\emph{estimates} $I(A{:}B)$ by roughly one of its own reported
+bootstrap-$\sigma$'s, on average, at this sample's statistics. This is a
+real, non-negligible bias, though modest in scale.
 \item \textbf{A pull standard deviation of approximately $1.5$--$1.7$}:
-the \emph{actual} spread of $(\hat X-X_{\rm true})$ across independent
+the \emph{actual} spread of $(\hat I-I_{\rm true})$ across independent
 repeats is $50$--$70\%$ \emph{larger} than what the reported bootstrap
 $\sigma$ claims. In other words, \texttt{NSB} $\pm$ \texttt{bootstrap
 $\sigma$} under-covers -- the quoted error bars are too tight. A
@@ -1154,9 +955,9 @@ $(N,\text{alphabet})$ therefore overstates the true significance by
 roughly this same factor (e.g.\ a naive $3\sigma$ claim would correspond
 to a true significance closer to $3/1.7\approx1.8\sigma$).
 \end{itemize}
-The pull distributions in both figures are also visibly non-Gaussian:
-skewed, with a heavier negative tail extending to several $\sigma$ beyond
-what a standard normal would predict, rather than a uniformly-widened but
+The pull distribution is also visibly non-Gaussian: skewed, with a
+heavier negative tail extending to several $\sigma$ beyond what a
+standard normal would predict, rather than a uniformly-widened but
 still-symmetric Gaussian. This matters practically: a single multiplicative
 correction to $\sigma$ (calibrating only the second moment) would not
 fully correct the shape of the tail, which is the part most relevant to a
@@ -1175,68 +976,23 @@ NSB estimates vs.\ the fitted-model pseudo-truth (right).}
 \label{fig:closure-I}
 \end{figure}
 
-\begin{figure}[htb]
-\centering
-\includegraphics[width=\textwidth]{figs/closure_test_NMI.png}
-\caption{Whole-sample closure test, $\NMI$: same three panels as
-Fig.~\ref{fig:closure-I}, for the normalized witness.}
-\label{fig:closure-nmi}
-\end{figure}
-
-\subsection{Extension to the conditional-entropy witness directly}
-\label{sec:closure-sba}
-
-Sections~\ref{sec:closure-method}--\ref{sec:closure-results} were run
-for $I(A{:}B)$ and $\NMI$; since $\SBA$ is the quantity that would
-actually carry a quantum-witness claim, a dedicated closure test for
-$\SBA$ itself (mean pull, pull standard deviation, and calibration
-fraction within $\pm1\sigma/\pm2\sigma$, identical procedure to
-Sec.~\ref{sec:closure-method}) has been implemented and is not inferred
-from $I$'s behavior via $\SBA=S_B-I(A{:}B)$ -- that inference would
-carry $S_B$'s own separate estimation noise and is not a substitute for
-a direct check.
-
-Figure~\ref{fig:closure-sba} shows the result on the same $14$~TeV
-validation sample. Qualitatively it differs from $I$/$\NMI$
-(Sec.~\ref{sec:closure-results}) in both sign and tightness: the pull
-distribution is concentrated at small \emph{positive} values (peak in
-the $[0,1]$ bin, most mass within $[-1,2]$) rather than the leftward
-skew seen for $I$/$\NMI$, indicating a modest positive bias -- NSB
-tends to slightly \emph{over}-estimate $\SBA$ here, the opposite
-direction from $I$'s under-estimate -- and the spread is visibly
-tighter, closer to a well-calibrated pull std of order $1$ than the
-$1.5$--$1.7$ found for $I$/$\NMI$. This is a genuinely different
-calibration behavior for the two quantities on the same sample, not a
-restatement of the same number, and is exactly why this check could not
-be skipped in favor of inferring $\SBA$'s calibration from $I$'s.
-
-\begin{figure}[htb]
-\centering
-\includegraphics[width=\textwidth]{figs/closure_test_SBA.png}
-\caption{Whole-sample closure test, $\SBA$: same three panels as
-Fig.~\ref{fig:closure-I}, for the conditional-entropy witness. Note the
-positive pull skew and tighter spread compared to $I$/$\NMI$
-(Fig.~\ref{fig:closure-I}--\ref{fig:closure-nmi}).}
-\label{fig:closure-sba}
-\end{figure}
-
 \subsection{$p_T$-differential closure test}
 \label{sec:closure-pt}
 
 The results of Sec.~\ref{sec:closure-results} calibrate NSB's uncertainty
 for a dataset shaped like the \emph{whole} sample -- but both the
 underlying multiplicity/correlation structure and the per-bin event count
-change with $p_T$ (Secs.~\ref{sec:pythia-ptdep},
-\ref{sec:pythia}--\ref{sec:pythia-nmi}), so whole-sample calibration does
-not automatically transfer to any individual $p_T$ bin, particularly the
-highest-$p_T$, lowest-statistics bins where a genuine signal would be
-most interesting and least well-measured. A $p_T$-differential extension
-of the closure test has been implemented: for each $p_T$ bin
-independently, fit a bin-specific Gamma-Poisson model to that bin's own
-events (not the whole-sample fit), generate a bin-specific pseudo-truth,
-and run the closure procedure at that bin's actual event count --
-directly answering ``is NSB's uncertainty trustworthy in \emph{this}
-bin'' rather than assuming the whole-sample answer applies uniformly.
+change with $p_T$ (Sec.~\ref{sec:pythia-ptdep}), so whole-sample
+calibration does not automatically transfer to any individual $p_T$ bin,
+particularly the highest-$p_T$, lowest-statistics bins where a genuine
+signal would be most interesting and least well-measured. A
+$p_T$-differential extension of the closure test has been implemented:
+for each $p_T$ bin independently, fit a bin-specific Gamma-Poisson model
+to that bin's own events (not the whole-sample fit), generate a
+bin-specific pseudo-truth, and run the closure procedure at that bin's
+actual event count -- directly answering ``is NSB's uncertainty
+trustworthy in \emph{this} bin'' rather than assuming the whole-sample
+answer applies uniformly.
 
 Figure~\ref{fig:closure-pt-summary} shows the result, in the same four
 $p_T$ bins used throughout Sec.~\ref{sec:pythia-ptdep} ($p_T$ centers
@@ -1245,62 +1001,53 @@ one respect more encouraging than, the whole-sample result of
 Sec.~\ref{sec:closure-results}:
 
 \begin{itemize}
-\item \textbf{Pull means} for $I(A{:}B)$ and $\NMI$ are small and
-negative throughout ($\approx-0.12$ to $-0.17$ in the three lower-$p_T$
-bins, shrinking to $\approx-0.04$ in the highest-$p_T$ bin) -- markedly
-smaller in magnitude than the whole-sample $\approx-1$ found in
-Sec.~\ref{sec:closure-results}. $\SBA$'s pull mean is somewhat larger at
-low $p_T$ ($\approx-0.29$) but trends toward zero as $p_T$ increases,
-reaching $\approx0$ in the highest-$p_T$ bin.
-\item \textbf{Pull standard deviations} for $I(A{:}B)$ and $\NMI$ rise
-from $\approx0.58$ (lowest-$p_T$ bin, i.e.\ \emph{over}-covering -- the
-bootstrap $\sigma$ is if anything too conservative there) through
-$\approx0.80$ and $\approx0.95$ to $\approx0.92$ in the highest-$p_T$
-bin -- staying at or below $1$ throughout, in contrast to the
-whole-sample $1.5$--$1.7$ under-covering. $\SBA$'s pull standard
-deviation is close to $1$ in every bin ($\approx1.02,1.00,1.11,0.92$) --
-the best-calibrated of the three quantities here, and encouragingly close
-to ideal given $\SBA$ is the quantity that would carry an actual
-discovery claim.
+\item \textbf{Pull means} are small and negative throughout
+($\approx-0.12$ to $-0.17$ in the three lower-$p_T$ bins, shrinking to
+$\approx-0.04$ in the highest-$p_T$ bin) -- markedly smaller in magnitude
+than the whole-sample $\approx-1$ found in Sec.~\ref{sec:closure-results}.
+\item \textbf{Pull standard deviations} rise from $\approx0.58$
+(lowest-$p_T$ bin, i.e.\ \emph{over}-covering -- the bootstrap $\sigma$
+is if anything too conservative there) through $\approx0.80$ and
+$\approx0.95$ to $\approx0.92$ in the highest-$p_T$ bin -- staying at or
+below $1$ throughout, in contrast to the whole-sample $1.5$--$1.7$
+under-covering.
 \end{itemize}
 
 \begin{figure}[htb]
 \centering
-\includegraphics[width=\textwidth]{figs/closure_test_pt_summary.png}
-\caption{$p_T$-differential closure test: NSB pull mean (top row) and
-standard deviation (bottom row) vs.\ leading-jet $p_T$, for $I(A{:}B)$
-(left), $\SBA$ (center), and $\NMI$ (right). Red dashed line marks
-perfect calibration (pull std $=1$).}
+\includegraphics[width=0.5\textwidth]{figs/closure_test_pt_summary_I_only.png}
+\caption{$p_T$-differential closure test, $I(A{:}B)$: NSB pull mean (top)
+and standard deviation (bottom) vs.\ leading-jet $p_T$. Red dashed line
+marks perfect calibration (pull std $=1$).}
 \label{fig:closure-pt-summary}
 \end{figure}
 
 This bin-by-bin result being better-calibrated than the whole-sample one
 is itself a meaningful, self-consistent finding, not merely a nicer
-number: Sec.~\ref{sec:closure-pt}'s entire motivation was that the
-whole-sample Gamma-Poisson fit has to compromise across a range of
-$p_T$-dependent correlation structures at once (Sec.~\ref{sec:pythia-ptdep}),
-whereas each bin-specific fit only has to describe its own,
-comparatively homogeneous sub-population. A better-calibrated per-bin
-result is exactly what that design difference predicts, and is evidence
-the whole-sample closure test's miscalibration (Sec.~\ref{sec:closure-results})
-is at least partly a model-fit-quality effect specific to forcing one
-3-parameter model to span the full $p_T$ range, rather than a property of
-NSB's bootstrap uncertainty in general. That said, this is a single
-validation dataset at one set of statistics; whether this pattern holds
-at STAR's actual $200$~GeV kinematics and statistics
-(Sec.~\ref{sec:conclusions}) is not yet established and should not be
-assumed.
+number: the whole-sample Gamma-Poisson fit has to compromise across a
+range of $p_T$-dependent correlation structures at once
+(Sec.~\ref{sec:pythia-ptdep}), whereas each bin-specific fit only has to
+describe its own, comparatively homogeneous sub-population. A
+better-calibrated per-bin result is exactly what that design difference
+predicts, and is evidence the whole-sample closure test's miscalibration
+(Sec.~\ref{sec:closure-results}) is at least partly a model-fit-quality
+effect specific to forcing one 3-parameter model to span the full $p_T$
+range, rather than a property of NSB's bootstrap uncertainty in general.
+That said, this is a single validation dataset at one set of statistics;
+whether this pattern holds at STAR's actual $200$~GeV kinematics and
+statistics (Sec.~\ref{sec:conclusions}) is not yet established and should
+not be assumed.
 
 Even with this more encouraging per-bin picture, no bin here reaches
-pull std $=1$ exactly, and the lowest-$p_T$ bin's over-covering for
-$I$/$\NMI$ ($\approx0.58$) is itself a $\sim\!40\%$ deviation from ideal
-calibration, in the conservative direction. The practical recommendation
-of Sec.~\ref{sec:closure-results} therefore still stands as the safe
-default -- treat raw bootstrap $\sigma$ with caution and consult a
-closure test at the actual bin/statistics in use -- with this section's
-result showing that the correction, at least for this validation sample,
-tends to be smaller and bidirectional per bin rather than a uniform
-large under-coverage.
+pull std $=1$ exactly, and the lowest-$p_T$ bin's over-covering
+($\approx0.58$) is itself a $\sim\!40\%$ deviation from ideal calibration,
+in the conservative direction. The practical recommendation of
+Sec.~\ref{sec:closure-results} therefore still stands as the safe default
+-- treat raw bootstrap $\sigma$ with caution and consult a closure test
+at the actual bin/statistics in use -- with this section's result showing
+that the correction, at least for this validation sample, tends to be
+smaller and unidirectional (over-covering, not under-covering) per bin
+rather than the uniform large under-coverage seen whole-sample.
 
 % =============================================================================
 \section{A distinct systematic: trivial kinematic MI, and its removal by
@@ -1328,12 +1075,10 @@ generator with no dynamical jet--jet correlation at all. This does not
 vanish for any finite bin width, only shrinks as the bin narrows; the
 quantity one actually wants is closer to the conditional mutual
 information $I(N_A{:}N_B \mid p_T)$, which finite-width binning only
-approximates from above. Notably, this problem does \emph{not} affect
-the quantum-witness test itself ($\SBA<0$ or $\NMI>1$): trivial
-kinematic correlation can only push a measurement deeper into the
-classical region, never fake a violation. It matters specifically for
-interpreting the \emph{magnitude} of a measured $I(A{:}B)$ as evidence
-of dynamical (as opposed to purely kinematic) correlation.
+approximates from above. This matters specifically for interpreting the
+\emph{magnitude} of a measured $I(A{:}B)$ as evidence of dynamical (as
+opposed to purely kinematic) correlation, and does not depend on any
+witness-style bound -- it is a statement about $I(A{:}B)$ itself.
 
 \subsection{Mixed-event subtraction}
 
@@ -1356,12 +1101,12 @@ construction). Uncertainties are obtained by a \emph{joint} bootstrap of
 the full difference: each resample rebuilds both the same-event pairs
 and the mixed pairs (re-matching within the resample) and recomputes
 $I_{\rm same}-I_{\rm mix}$ for all four methods, never propagating the
-two terms' errors separately -- the same lesson as
-Sec.~\ref{sec:pitfall}, and more important here since the two terms
-share events and are strongly correlated. The matching resolution $k$ is
-itself a systematic: any residual within-window $p_T$ variation remains
-unsubtracted trivial MI, and varying $k$ and checking stability of
-$I_{\rm signal}$ is the natural check.
+two terms' errors separately -- the same principle as
+Sec.~\ref{sec:errors-principle}, and more important here since the two
+terms share events and are strongly correlated. The matching resolution
+$k$ is itself a systematic: any residual within-window $p_T$ variation
+remains unsubtracted trivial MI, and varying $k$ and checking stability
+of $I_{\rm signal}$ is the natural check.
 
 \subsection{Relation to shuffle-subtraction}
 
@@ -1566,81 +1311,95 @@ activity variables, not just jet-B's $p_T$) if a cleaner separation of
 kinematic, underlying-event, and (eventually, on real detector data)
 any genuinely anomalous component is wanted.
 
-
 % =============================================================================
-\section{Overall conclusions and next steps}
+\section{Overall summary and next steps}
 \label{sec:conclusions}
 % =============================================================================
 
-The toy Monte Carlo study (Secs.~\ref{sec:toymc}--\ref{sec:sensitivity})
-establishes the estimator methodology and its failure modes under
-controlled, known conditions. Section~\ref{sec:pythia} shows the same
-pipeline, unmodified, correctly recovers physically-expected behavior
-(NBD-like overdispersion, MLLA-consistent multiplicity growth with $p_T$,
-the same finite-sample bias shape) on realistic QCD Monte-Carlo output
-where no such structure was hand-built in -- a meaningful, if indirect,
-validation that the pipeline is measuring real structure rather than an
-artifact of the toy model's specific construction. An independent
-ROOT/C++ re-implementation (Sec.~\ref{sec:pythia-nmi}) cross-validates the
-Python results and adds $\NMI$, the scale-comparable normalized version
-of the witness (Sec.~\ref{sec:observable}) needed to compare measurements
-across $p_T$ bins, run periods, or collision energies on a common,
-bounded scale.
+This note works through one measurement -- mutual information between
+two back-to-back jets' hadron multiplicities -- end to end: a controlled
+toy study, validation on a full QCD event generator, a general
+error-estimation framework, closure tests that calibrate what the
+reported uncertainties are actually worth, and a further correction for
+a kinematic confound that has nothing to do with any of the above. This
+section summarizes what each stage established, in that order, and what
+remains before the identical pipeline can be applied to real STAR/ALICE
+data.
 
-That cross-validation also surfaced a genuine implementation bug
-(Sec.~\ref{sec:pitfall}): a bootstrap-based derived quantity ($\NMI$)
-picked up its uncertainty from an inconsistent, more conservative
-analytic formula rather than the same resampling procedure used for
-$I(A{:}B)$ and $\SBA$ in the same function. The fix, and more
-importantly the general principle it illustrates -- every derived
-quantity built from one bootstrap procedure must be resampled together,
-not mixed with a separately-derived analytic error -- is recorded in
-full since it is a pitfall relevant to any bootstrap-based entropy/MI
-pipeline, not just this one.
+\subsection{From the toy Monte Carlo study (Secs.~\ref{sec:toymc}--\ref{sec:nsb})}
 
-Section~\ref{sec:closure} closes the gap the previous revision of this
-note flagged as open: a closure test calibrated to resemble the real
-PYTHIA~8 sample (Gamma-Poisson model fit to the real data's marginals and
-correlation strength, huge reference sample for a pseudo-truth, repeated
-closure at the real dataset's actual statistics) finds that NSB's
-bootstrap uncertainty, at this sample's $(N,\text{alphabet})$, is
-\textbf{under-covering by a factor of roughly $1.5$--$1.7$}, with a mean
-bias of order $-1\sigma$ and a pull distribution that is skewed rather
-than symmetrically widened. This is a quantitative, load-bearing result
-for any future significance claim: a naive $3\sigma$ excess computed from
-raw bootstrap $\sigma$ at comparable statistics should be read as
-$\sim\!1.8$--$2\sigma$ once this calibration factor is accounted for. Per
-Sec.~\ref{sec:closure}, no correction has been baked into the pipeline
+\begin{enumerate}
+
+\item \textbf{The naive plug-in MI estimator is always biased upward},
+with leading term $\approx(K_{AB}-K_A-K_B+1)/(2N)$. Coarser binning or
+fewer events both make it worse -- comparing different STAR running
+periods, luminosities, or binning choices will report different central
+MI values from what should be the same physics, purely from this effect.
+
+\item \textbf{Miller--Madow} (done correctly, using the observed
+$K_{AB}$, not the product $K_AK_B$) and \textbf{shuffle-subtraction} both
+substantially reduce this bias and stay well-behaved, but neither is exact
+at small $N$: Miller--Madow is a first-order truncation;
+shuffle-subtraction tends to systematically overcorrect when the true
+correlation is strong.
+
+\item \textbf{NSB} is the recommended estimator for the real analysis: a
+Bayesian posterior-mean entropy built on a prior specifically constructed
+to be uninformative about entropy itself. It tracks the truth closely
+across the entire tested $N$ range, including deep in the
+severely-undersampled regime where the other methods struggle, at a
+modest computational cost.
+
+\end{enumerate}
+
+\subsection{From the PYTHIA~8 validation (Sec.~\ref{sec:pythia})}
+
+The same pipeline, unmodified, correctly recovers physically-expected
+behavior (NBD-like overdispersion, MLLA-consistent multiplicity growth
+with $p_T$, the same finite-sample bias shape) on realistic QCD
+Monte-Carlo output where no such structure was hand-built in -- a
+meaningful, if indirect, validation that the pipeline is measuring real
+structure rather than an artifact of the toy model's specific
+construction. An independent ROOT/C++ re-implementation cross-validates
+the Python results throughout.
+
+\subsection{From error estimation and closure testing (Secs.~\ref{sec:errors}--\ref{sec:closure})}
+
+Sec.~\ref{sec:errors} fixes the general rule used everywhere in this
+note: bootstrap the full quantity of interest directly, never propagate
+separately-estimated component errors. A closure test calibrated to
+resemble the real PYTHIA~8 sample (Gamma-Poisson model fit to the real
+data's marginals and correlation strength, huge reference sample for a
+pseudo-truth, repeated closure at the real dataset's actual statistics)
+finds that NSB's bootstrap uncertainty, at this sample's
+$(N,\text{alphabet})$, is \textbf{under-covering by a factor of roughly
+$1.5$--$1.7$}, with a mean bias of order $-1\sigma$ and a pull
+distribution that is skewed rather than symmetrically widened. This is a
+quantitative, load-bearing result for any future significance claim: a
+naive $3\sigma$ excess computed from raw bootstrap $\sigma$ at comparable
+statistics should be read as $\sim\!1.8$--$2\sigma$ once this calibration
+factor is accounted for. No correction has been baked into the pipeline
 itself -- this factor is reported here as a measured property of the
 estimator at these statistics, to be applied explicitly and cited
 whenever a significance is quoted, rather than silently folded into the
 numbers.
 
-The $p_T$-differential extension of the closure test (Sec.~\ref{sec:closure-pt})
-is now complete for this validation sample, and adds an important
-nuance: bin-by-bin, NSB's pull standard deviations sit much closer to
-the ideal value of $1$ ($\approx0.58$--$0.95$ for $I(A{:}B)$ and $\NMI$;
-$\approx0.92$--$1.11$ for $\SBA$) than the whole-sample result above,
-consistent with each bin's own Gamma-Poisson fit describing a more
-homogeneous sub-population than the one compromise fit spanning the
-whole $p_T$ range has to. This suggests the whole-sample
-under-coverage found in Sec.~\ref{sec:closure-results} is at least
-partly a consequence of fitting one model across a range of
-$p_T$-dependent structure, rather than an intrinsic property of NSB's
-bootstrap procedure -- but this is one validation dataset at one set of
-statistics, and the pattern should be re-checked, not assumed, at
-STAR's actual kinematics. The dedicated whole-sample pull-distribution
-check for $\SBA$ itself (Sec.~\ref{sec:closure-sba} -- distinct from its
-per-bin counterpart just described, and the single most directly
-load-bearing calibration number for a discovery claim) is now complete:
-its pull distribution is positively skewed (a modest over-estimate,
-opposite in sign from $I$/$\NMI$'s under-estimate) but visibly tighter,
-closer to nominal calibration than $I$/$\NMI$'s $1.5$--$1.7$ factor.
-That the two quantities calibrate differently on the same sample is
-itself informative -- a single blanket correction factor would not be
-appropriate across all three observables.
+The $p_T$-differential extension of the closure test
+(Sec.~\ref{sec:closure-pt}) adds an important nuance: bin-by-bin, NSB's
+pull standard deviations sit much closer to the ideal value of $1$
+($\approx0.58$--$0.95$) than the whole-sample result above, consistent
+with each bin's own Gamma-Poisson fit describing a more homogeneous
+sub-population than the one compromise fit spanning the whole $p_T$
+range has to. This suggests the whole-sample under-coverage found in
+Sec.~\ref{sec:closure-results} is at least partly a consequence of
+fitting one model across a range of $p_T$-dependent structure, rather
+than an intrinsic property of NSB's bootstrap procedure -- but this is
+one validation dataset at one set of statistics, and the pattern should
+be re-checked, not assumed, at STAR's actual kinematics.
 
-Section~\ref{sec:mixed} addresses a separate concern from estimator
+\subsection{From the kinematic-background correction (Sec.~\ref{sec:mixed})}
+
+Sec.~\ref{sec:mixed} addresses a separate concern from estimator
 calibration: any finite $p_T$ window induces real but kinematically
 trivial MI through the momentum-balance correlation between the two
 jets' $p_T$'s. A mixed-event subtraction removes this by construction
@@ -1649,40 +1408,52 @@ finite-sample bias very nearly cancels between the same-event and
 mixed-event terms, so the subtracted difference is close to unbiased
 even before explicit correction -- confirmed both on a controlled
 synthetic dataset and by a full-statistics closure test run directly on
-the real sample's fitted kinematics (Sec.~\ref{sec:mixed}), where the
-mixed-event difference showed better calibration than the raw
-single-term estimators of Sec.~\ref{sec:closure}. Applied to the real
-$14$~TeV validation sample, roughly $60$--$70\%$ of the raw whole-sample
-$I(A{:}B)$ is trivial kinematic correlation; the remaining
-$\approx0.003$~nats, consistent across all four estimator methods, is a
-genuine beyond-kinematics signal most plausibly attributable to shared
-underlying-event activity (Sec.~\ref{sec:mixed-real}) rather than
-anything exotic -- exactly the kind of confound this correction exists
-to separate out before any dynamical or quantum interpretation of a
-measured $I(A{:}B)$ magnitude is warranted.
+the real sample's fitted kinematics, where the mixed-event difference
+showed better calibration than the raw single-term estimators of
+Sec.~\ref{sec:closure}. Applied to the real $14$~TeV validation sample,
+roughly $60$--$70\%$ of the raw whole-sample $I(A{:}B)$ is trivial
+kinematic correlation; the remaining $\approx0.003$~nats, consistent
+across all four estimator methods, is a genuine beyond-kinematics signal
+most plausibly attributable to shared underlying-event activity
+(Sec.~\ref{sec:mixed-real}) rather than anything exotic -- exactly the
+kind of confound this correction exists to separate out before any
+dynamical interpretation of a measured $I(A{:}B)$ magnitude is
+warranted. As discussed in Sec.~\ref{sec:motivation}, that interpretation
+question is bounded on both ends: any observed conditional-entropy
+violation could only ever be a statistical artifact (never directly
+measured physics), and genuine quantum discord is identically zero for
+any classical count distribution regardless. What this pipeline
+delivers is a rigorously measured $I(A{:}B)$, with its estimator bias
+removed, its uncertainty calibrated, and its trivial kinematic component
+separated out -- the necessary, but not by itself sufficient, input to
+that larger question.
 
-Remaining steps toward the actual STAR measurement: (i) repeat
-Sec.~\ref{sec:pythia} at $\sqrt{s}=200$~GeV with STAR-appropriate jet
-kinematics rather than the wide-dynamic-range $14$~TeV validation
-kinematics used here; (ii) apply the detector-level acceptance and
-tracking-efficiency model (already implemented in the generator, not yet
-exercised in this note) and repeat the full analysis chain; (iii) rerun
-the whole-sample and $p_T$-differential closure tests
+\subsection{Remaining steps toward the actual STAR measurement}
+
+\begin{enumerate}
+\item Repeat Sec.~\ref{sec:pythia} at $\sqrt{s}=200$~GeV with
+STAR-appropriate jet kinematics rather than the wide-dynamic-range
+$14$~TeV validation kinematics used here.
+\item Apply the detector-level acceptance and tracking-efficiency model
+(already implemented in the generator, not yet exercised in this note)
+and repeat the full analysis chain.
+\item Rerun the whole-sample and $p_T$-differential closure tests
 (Secs.~\ref{sec:closure-results}--\ref{sec:closure-pt}) at the actual
-statistics of (i)--(ii), obtaining calibration factors specific to the
+statistics of (1)--(2), obtaining calibration factors specific to the
 real analysis rather than relying on the $14$~TeV validation sample's
-factors as a proxy; (iv) rerun the mixed-event subtraction and its
-closure test (Sec.~\ref{sec:mixed}) at STAR kinematics and statistics --
-done so far only on the $14$~TeV validation sample -- including the
-still-missing $p_T$-differential closure test for the subtracted
-quantity, needed before any per-bin beyond-kinematics result can carry
-a trustworthy significance; (v) once (i)--(iv) are complete, apply the identical pipeline to real
-STAR data, with the sensitivity/detection-threshold machinery of
-Sec.~\ref{sec:sensitivity} \emph{and} all applicable closure-test
-calibration factors applied explicitly, before unblinding, to state
-precisely how large a genuine quantum-correlation excess would need to
-be to constitute a significant detection at the actual achieved
-statistics.
+factors as a proxy.
+\item Rerun the mixed-event subtraction and its closure test
+(Sec.~\ref{sec:mixed}) at STAR kinematics and statistics -- done so far
+only on the $14$~TeV validation sample -- including the still-missing
+$p_T$-differential closure test for the subtracted quantity, needed
+before any per-bin beyond-kinematics result can carry a trustworthy
+significance.
+\item Once (1)--(4) are complete, apply the identical pipeline to real
+STAR data, with all applicable closure-test calibration factors applied
+explicitly before unblinding, so that any reported excess is quoted
+against a pre-calibrated, honestly-covered uncertainty rather than a raw
+bootstrap $\sigma$ known already to under-cover.
+\end{enumerate}
 
 \end{document}
 

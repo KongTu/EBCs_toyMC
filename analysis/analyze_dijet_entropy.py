@@ -664,7 +664,11 @@ def plot_multiplicity_vs_pt_profile(jet1_pt, jet2_pt, n_a, n_b, out_prefix, n_bi
 def plot_pt_distributions(jet1_pt, jet2_pt, out_prefix, n_bins=40):
     """i) Jet pT distributions (leading and subleading), with Poisson
     counting error bars per bin -- the pT-space analogue of the
-    multiplicity distribution plot above."""
+    multiplicity distribution plot above. Log-scale y-axis: the QCD jet
+    pT spectrum falls steeply (close to a power law), so a linear axis
+    compresses the whole tail into a sliver near y=0 -- log-scale is
+    needed to actually see the falling spectrum's shape and confirm it
+    behaves as expected across the full range, not just at the peak."""
     fig, axes = plt.subplots(1, 2, figsize=(12, 4.8))
 
     for ax, pt, label, color in [
@@ -680,10 +684,18 @@ def plot_pt_distributions(jet1_pt, jet2_pt, out_prefix, n_bins=40):
         p_hat = counts / (N * widths)              # normalized density
         p_err = np.sqrt(counts) / (N * widths)      # Poisson counting error
 
-        ax.errorbar(centers, p_hat, yerr=p_err, fmt='o', color=color,
+        # Log scale can't show zero/empty bins or a lower error bar that
+        # dips to <=0 -- drop empty bins and clip the lower error so the
+        # bar never crosses zero (matplotlib would just clip the artist
+        # silently, but computing it explicitly avoids the RuntimeWarning).
+        nonzero = counts > 0
+        yerr_lower = np.minimum(p_err[nonzero], p_hat[nonzero] * 0.999)
+        ax.errorbar(centers[nonzero], p_hat[nonzero],
+                    yerr=[yerr_lower, p_err[nonzero]], fmt='o', color=color,
                     markersize=4, capsize=2, label=f'{label} (N={N})')
         ax.set_xlabel(r'jet $p_T$ (GeV)')
         ax.set_ylabel(r'probability density (GeV$^{-1}$)')
+        ax.set_yscale('log')
         ax.set_title(label)
         ax.legend(fontsize=9)
 

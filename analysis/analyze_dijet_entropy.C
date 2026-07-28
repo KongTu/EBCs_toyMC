@@ -757,6 +757,9 @@ void plotPtDistributions(const std::vector<double>& jet1Pt, const std::vector<do
 
     for (int j = 0; j < 2; ++j) {
         c->cd(j+1);
+        gPad->SetLogy();  // steeply-falling QCD jet pT spectrum -- linear
+                          // scale compresses the whole tail into a sliver
+                          // near y=0, log-scale needed to see its shape
         const std::vector<double>& pt = *specs[j].pt;
         double ptMin = *std::min_element(pt.begin(), pt.end());
         double ptMax = *std::max_element(pt.begin(), pt.end());

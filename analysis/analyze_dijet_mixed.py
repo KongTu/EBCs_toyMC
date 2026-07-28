@@ -202,7 +202,7 @@ def plot_diff_vs_pt(bin_results, out_prefix):
     ax.set_xlabel(r"leading jet $p_T$ (GeV)")
     ax.set_ylabel(r"$I_{\rm same} - I_{\rm mix}$ (nats)")
     ax.set_title("Beyond-kinematics MI vs. $p_T$ (mixed-event subtracted)")
-    ax.legend(fontsize=9)
+    ax.legend(fontsize=9, loc='upper left')
     plt.tight_layout()
     plt.savefig(f"{out_prefix}_mixed_diff_vs_pt.png", dpi=150)
     print(f"  saved {out_prefix}_mixed_diff_vs_pt.png")

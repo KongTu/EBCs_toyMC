@@ -1,0 +1,21 @@
+Comments to the dijet hadron multiplicity correlation study note:
+
+This is a very well writen note, which includes valuable physics and statistical methods that can be used for physics measurement. I found it very interesting and the methods are well presented. To make it better and structurally more intuitive, here are some comments:
+
+1. Given the conclusion that we cannot use it for the quantum witness, the motivation of conditional entropy is not needed; specficially, it is confusing to introduce that as a way to discover quantum discord or correlation in Sec.2, but later says it cannot. My suggestions are: we should remove everything about conditional entropy and not use it as an observable, and only talk about the quantum witness issue in the introduction of this joint hadron multiplicity measurement. 
+
+2. I would remove Sec. 7 altogether because we do not need this quantum detection;
+
+3. I would move Sec. 8 to the very end, which includes a summary of everything. It should have a structure that we go 1) MC toy study and then 2) Pythia 8 Simulation study, and so on. Having a summary in the middle of the note is strange. 
+
+4. Figure 11 should be log scale in y-axis, we should update that script when producing the plot.
+
+5. I think the error estimation should be a standalone section that applies to both MC toy and PYTHIA study. We should talk in details about the definitions (Nrepeats, subsamples, etc.) and how to obtain the errors. This will serve to both studies. 
+
+6. We should completely drop all the discussion on the previous bug and figures, and remove any discussion related to that. We just need to show the correct one, which is sufficient. Specifically, those figures with wrong error bars should be removed, e.g., Fig.20, Fig.21 (right).
+
+7. we should call it "closure test" instead of Tier 2 closure test, because this is not needed and confusing. 
+
+8. there is a mistake (probably?) introduced in Fig.28, where the s=0 without any beyond kinematic correlation, but the plot show a line at 0.15. Also, the quantity is not s but entropy or MI. We need to update these scripts and the figures. 
+
+9. Fig.31 the legends are still blocking the data points, move it towards the left side.
