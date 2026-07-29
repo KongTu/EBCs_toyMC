@@ -342,6 +342,53 @@ run_closure_mixed_root() {
     run_root_macro "${MACRO}"
 }
 
+# ---- 11: closure_test_mixed_pt.py --------------------------------------
+
+run_closure_mixed_pt_py() {
+    echo ""
+    echo "== closure_test_mixed_pt.py (pT-differential closure test for the mixed-event method) =="
+    require_root_file
+    ask LEVEL "Level (truth or det)" "truth"
+    ask ALPHABET "Alphabet" "80"
+    ask MIX_NEIGHBORS "k-nearest neighbors for pT2 matching" "10"
+    ask SIGNAL_STRENGTH "Injected signal strength s (null s=0 always runs too, every bin)" "0.15"
+    ask PT_BINS "Quantile pT bins" "4"
+    ask MIN_EVENTS "Skip bins with fewer events than this" "300"
+    ask N_REPEATS "Closure repeats per (bin, scenario)" "20"
+    ask N_BOOT "Joint bootstrap resamples per repeat" "20"
+    ask N_SHUFFLES "Shuffles for the shuffle-correction estimator" "15"
+    ask REF_N "Reference sample size for pseudo-truth, per bin" "500000"
+    ask FIGS_DIR "Directory to save figures in" "figs"
+
+    CMD="python3 closure_test_mixed_pt.py \"${ROOT_FILE}\" --level ${LEVEL} --alphabet ${ALPHABET} --mix-neighbors ${MIX_NEIGHBORS} --signal-strength ${SIGNAL_STRENGTH} --pt-bins ${PT_BINS} --min-events ${MIN_EVENTS} --n-repeats ${N_REPEATS} --n-boot ${N_BOOT} --n-shuffles ${N_SHUFFLES} --ref-n ${REF_N} --figs-dir \"${FIGS_DIR}\""
+    confirm_and_run "${CMD}"
+}
+
+# ---- 12: closure_test_mixed_pt.C ---------------------------------------
+
+run_closure_mixed_pt_root() {
+    echo ""
+    echo "== closure_test_mixed_pt.C (ROOT, ACLiC-compiled, runs from \$HOME) =="
+    require_root_file
+    ask LEVEL "Level (truth or det)" "truth"
+    ask ALPHABET "Alphabet" "80"
+    ask MIX_NEIGHBORS "k-nearest neighbors for pT2 matching" "10"
+    ask SIGNAL_STRENGTH "Injected signal strength s (null s=0 always runs too, every bin)" "0.15"
+    ask PT_BINS "Quantile pT bins" "4"
+    ask PT_BIN_MODE "pT bin mode (quantile or fixed)" "quantile"
+    ask MIN_EVENTS "Skip bins with fewer events than this" "300"
+    ask N_REPEATS "Closure repeats per (bin, scenario)" "20"
+    ask N_BOOT "Joint bootstrap resamples per repeat" "20"
+    ask N_SHUFFLES "Shuffles for the shuffle-correction estimator" "15"
+    ask REF_N "Reference sample size for pseudo-truth, per bin" "500000"
+    ask FIGS_DIR "Directory to save figures in (absolute path recommended)" \
+        "/Users/zhoudunmingtu/bnl_work/Work/MODELS/EBCs_toyMC/analysis/figs"
+    FIGS_DIR="$(to_abs_path "${FIGS_DIR}")"
+
+    MACRO="closure_test_mixed_pt.C+(\"${ROOT_FILE}\",\"${LEVEL}\",${ALPHABET},${MIX_NEIGHBORS},${SIGNAL_STRENGTH},${PT_BINS},\"${PT_BIN_MODE}\",${MIN_EVENTS},${N_REPEATS},${N_BOOT},${N_SHUFFLES},${REF_N},\"${FIGS_DIR}\")"
+    run_root_macro "${MACRO}"
+}
+
 # ---- main menu ----------------------------------------------------------
 
 
@@ -361,6 +408,8 @@ show_menu() {
     echo "   8) analyze_dijet_mixed.C        (mixed-event subtraction, ROOT)"
     echo "   9) closure_test_mixed.py        (closure test for mixed method, Python)"
     echo "  10) closure_test_mixed.C         (closure test for mixed method, ROOT)"
+    echo "  11) closure_test_mixed_pt.py     (pT-differential closure for mixed method, Python)"
+    echo "  12) closure_test_mixed_pt.C      (pT-differential closure for mixed method, ROOT)"
     echo "   0) Exit"
     echo "================================================================"
     echo "  Tip: './run_analysis.sh <N> yourfile.root' skips all prompts and"
@@ -380,6 +429,8 @@ run_choice() {
         8) run_mixed_root ;;
         9) run_closure_mixed_py ;;
         10) run_closure_mixed_root ;;
+        11) run_closure_mixed_pt_py ;;
+        12) run_closure_mixed_pt_root ;;
         0) exit 0 ;;
         *) echo "  Not a valid option." ;;
     esac
